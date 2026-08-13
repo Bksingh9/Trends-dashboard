@@ -14,6 +14,7 @@ import { guardSql, schemaPrompt, SQL_GUARD } from '@/lib/ai/sql-guard';
 import { ASK_THE_DATA_SYSTEM } from '@/lib/ai/prompts';
 import { METRICS } from '@/lib/metrics/registry';
 import { getSessionUser } from '@/lib/auth';
+import { rateLimit } from '@/lib/api/guards';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +35,18 @@ function matchKnownMetric(question: string): string | null {
 
 export async function POST(req: NextRequest) {
   const user = getSessionUser();
+
+  // §28.9 — rate-limit per user. Each request can cost a model call and a
+  // database query, so a runaway client should be stopped by the server rather
+  // than noticed on the bill.
+  const limit = rateLimit(`ask:${user.email}`, { limit: 20, windowSeconds: 60 });
+  if (!limit.allowed) {
+    return NextResponse.json(
+      { error: `Rate limit reached. Try again in ${limit.resetInSeconds}s.` },
+      { status: 429, headers: { 'Retry-After': String(limit.resetInSeconds) } },
+    );
+  }
+
   let body: { question?: string; execute?: boolean; sql?: string };
   try {
     body = (await req.json()) as typeof body;

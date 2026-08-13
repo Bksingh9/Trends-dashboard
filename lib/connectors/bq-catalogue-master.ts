@@ -9,7 +9,6 @@ import { config } from '@/lib/config';
 import { cardinality, nullRate, rowVolume } from '@/lib/assertions';
 import { normalizeEan } from '@/lib/format/ean';
 import { normalizeItemCode } from '@/lib/format/keys';
-import type { DateWindow } from '@/lib/format/dates';
 import { isBigQueryConfigured, runQuery } from '@/lib/gcp/bigquery';
 import { BaseConnector } from './base';
 import type { Assertion, CostTier, LoadResult } from './types';
@@ -111,7 +110,7 @@ export class BqCatalogueMasterConnector extends BaseConnector<RawItem, ProductRo
     return { rowsIngested: rows.length, table: 'dim_product' };
   }
 
-  protected fixture(_w: DateWindow): ProductRow[] {
+  protected fixture(): ProductRow[] {
     // The gap classifier is exercised by the fixture gap register instead; a
     // 3-lakh-row product fixture would be noise.
     return [];

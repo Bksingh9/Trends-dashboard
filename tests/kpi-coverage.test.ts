@@ -7,7 +7,7 @@
  * notice that a number leadership asked for is simply absent from the product.
  */
 import { describe, expect, it } from 'vitest';
-import { ALL_METRIC_IDS, getMetric, METRICS } from '@/lib/metrics/registry';
+import { ALL_METRIC_IDS, getMetric } from '@/lib/metrics/registry';
 import {
   appHealthModule,
   catalogueModule,

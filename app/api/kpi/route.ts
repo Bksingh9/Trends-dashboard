@@ -9,7 +9,7 @@ export async function GET(req: NextRequest) {
   const p = parseParams(new URL(req.url), 28);
   try {
     const mod = await salesModule(p.window);
-    return json(envelope({ kpis: mod.kpis, daily: mod.data.daily }, { metrics: mod.kpis, window: p.window, warnings: mod.warnings }));
+    return json(envelope({ kpis: mod.kpis, daily: mod.data.daily }, { metrics: mod.kpis, window: p.window, warnings: [...p.warnings, ...mod.warnings] }));
   } catch (e) {
     return errorEnvelope(e, p.window);
   }

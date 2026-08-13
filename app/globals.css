@@ -18,11 +18,20 @@
   --color-slab: #171d25; /* raised surface */
   --color-edge: #262e3a; /* hairline borders */
   --color-paper: #e9ebe6; /* light surface, thermal receipt stock */
-  --color-muted: #8a94a3; /* secondary text */
+  --color-muted: #8a94a3; /* secondary text — 5.53:1 on --slab */
+  /* Secondary text that may render *over* a filled bar rather than the plain
+     surface. --muted measures only 3.47:1 against the funnel's ion-tinted fill;
+     this measures 5.56:1 there and higher on the surface, so one token is safe
+     wherever a bar's width is data-dependent. */
+  --color-muted-on-fill: #b4bcc7;
   --color-scan: #2de0a5; /* healthy — scanner-beam green */
   --color-warn: #ffb020; /* watch */
   --color-alert: #ff5c46; /* breach */
-  --color-ion: #4c6fff; /* primary interactive */
+  /* Primary interactive. Lightened from #4c6fff, which measured 4.06–4.46:1
+     against the dark surfaces — under the 4.5:1 WCAG AA floor for normal text,
+     and these links render at 11px. #6b88ff measures 5.32–5.85:1 and reads as
+     the same blue. It doubles as the focus ring, so the ring got clearer too. */
+  --color-ion: #6b88ff;
 
   --font-display: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
   --font-sans: var(--font-inter-tight), ui-sans-serif, system-ui, sans-serif;

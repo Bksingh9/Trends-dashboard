@@ -2,7 +2,7 @@
   "name": "companion-trends-dashboard",
   "version": "0.1.0",
   "private": true,
-  "description": "Companion App (Trends) — Unified Business & Health Dashboard",
+  "description": "Companion App (Trends) \u2014 Unified Business & Health Dashboard",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -17,7 +17,10 @@
     "etl:run": "tsx scripts/etl.ts run",
     "etl:backfill": "tsx scripts/etl.ts backfill",
     "etl:status": "tsx scripts/etl.ts status",
-    "verify:browser": "tsx scripts/verify-browser.ts"
+    "verify:browser": "tsx scripts/verify-browser.ts",
+    "e2e": "playwright test",
+    "e2e:a11y": "playwright test e2e/a11y.spec.ts",
+    "qa": "npm run lint && npm run typecheck && npm test && npm run build && npm run e2e"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.0",
@@ -35,6 +38,7 @@
     "zod": "^4.1.13"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@eslint/eslintrc": "^3",
     "@playwright/test": "^1.57.0",
     "@tailwindcss/postcss": "^4",

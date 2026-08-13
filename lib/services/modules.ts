@@ -34,19 +34,16 @@ import {
   getScans,
   getStoreOps,
   getStores,
-  type Sourced,
 } from '@/lib/data/repository';
 import { getThresholds } from '@/lib/db/settings';
 import {
   addDays,
   dateRange,
   previousPeriod,
-  sameWeekdayLastWeek,
   todayIST,
   trailingWindow,
   type DateWindow,
 } from '@/lib/format/dates';
-import { config } from '@/lib/config';
 import { FUNNEL_STEPS } from '@/fixtures/business';
 import type { DataSourceState } from '@/lib/connectors/types';
 

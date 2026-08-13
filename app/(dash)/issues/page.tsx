@@ -118,10 +118,13 @@ export default async function IssuesPage() {
               );
             })}
             {/* §0 — Loyalty column present but disabled. */}
-            <li className="grid grid-cols-[11rem_1fr_4rem] items-center gap-3 opacity-40">
-              <span className="truncate text-xs">Reliance One Loyalty</span>
-              <div className="hatch h-3 rounded-sm" />
-              <span className="text-right text-2xs">off</span>
+            {/* Recessed but legible. `opacity-40` dropped this to 3.34:1 —
+                a disabled row still has to be readable, and the hatch already
+                carries the "off" signal without dimming the text. */}
+            <li className="grid grid-cols-[11rem_1fr_4rem] items-center gap-3">
+              <span className="truncate text-xs text-[var(--text-muted)]">Reliance One Loyalty</span>
+              <div className="hatch h-3 rounded-sm opacity-50" />
+              <span className="text-right text-2xs text-[var(--text-muted)]">off</span>
             </li>
           </ul>
         </figure>

@@ -8,7 +8,7 @@
 import { BUSINESS_BASELINE, WORKSTREAMS } from './baselines';
 import { FIXTURE_LIVE_STORES } from './stores';
 import { gaussian, hashSeed, makeRng } from './rng';
-import { addDays, dateRange, isWeekend, type DateWindow } from '@/lib/format/dates';
+import { dateRange, isWeekend, type DateWindow } from '@/lib/format/dates';
 import { CRITICAL_ENDPOINTS, DEFAULT_THRESHOLDS } from '@/lib/db/settings';
 import { PROD_AFFILIATE } from '@/lib/config/env-guard';
 
@@ -165,7 +165,7 @@ export function fixtureFunnel(window: DateWindow): FunnelRow[] {
     const rng = makeRng(hashSeed(`funnel:${dateKey}`));
     const seasonal = isWeekend(dateKey) ? 1.31 : 0.92;
     const g = growthFactor(dateKey) / growthFactor('2026-08-12');
-    let sessions = Math.round(BASE_SESSIONS_PER_DAY * seasonal * (0.9 + rng() * 0.2) * g);
+    const sessions = Math.round(BASE_SESSIONS_PER_DAY * seasonal * (0.9 + rng() * 0.2) * g);
 
     for (const platform of ['Android', 'iOS'] as const) {
       const share = platform === 'Android' ? 0.78 : 0.22;

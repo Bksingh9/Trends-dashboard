@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
     return json(
       envelope(
         { rows, states: mod.data.states, darkWorklist: mod.data.darkWorklist, cohort: mod.data.cohort },
-        { metrics: mod.kpis, window: p.window, warnings: mod.warnings },
+        { metrics: mod.kpis, window: p.window, warnings: [...p.warnings, ...mod.warnings] },
       ),
     );
   } catch (e) {

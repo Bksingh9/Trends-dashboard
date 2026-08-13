@@ -10,7 +10,6 @@
  */
 import { config } from '@/lib/config';
 import { rowVolume } from '@/lib/assertions';
-import type { DateWindow } from '@/lib/format/dates';
 import { BaseConnector } from './base';
 import type { Assertion, CostTier, LoadResult } from './types';
 
@@ -45,7 +44,7 @@ export class AmplitudeConnector extends BaseConnector<AmplitudeRow, AmplitudeRow
     return { rowsIngested: rows.length, table: '(none)' };
   }
 
-  protected fixture(_w: DateWindow): AmplitudeRow[] {
+  protected fixture(): AmplitudeRow[] {
     return [];
   }
 

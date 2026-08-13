@@ -53,10 +53,13 @@ export function FunnelChart({
                 />
                 <div className="relative flex h-full items-center justify-between px-3">
                   <span className="text-xs">
-                    <span className="text-[var(--text-muted)]">{i + 1}.</span> {s.label}
+                    {/* The bar's width is data-dependent, so this text may sit
+                        over the fill or over the surface. --muted-on-fill clears
+                        4.5:1 on both. */}
+                    <span className="text-[var(--color-muted-on-fill)]">{i + 1}.</span> {s.label}
                     {!s.isInstrumented && (
                       <span
-                        className="ml-2 rounded border border-[var(--color-edge)] px-1 text-2xs text-[var(--text-muted)]"
+                        className="ml-2 rounded border border-[var(--color-edge)] px-1 text-2xs text-[var(--color-muted-on-fill)]"
                         title="This event is absent from the GTM container. There is no number to show — it is not zero."
                       >
                         not instrumented

@@ -6,6 +6,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { CONNECTORS, getConnector } from '@/lib/connectors/registry';
+import { isCronAuthorised } from '@/lib/api/guards';
 import { trailingWindow, type DateWindow } from '@/lib/format/dates';
 
 export const dynamic = 'force-dynamic';
@@ -27,15 +28,8 @@ const WINDOW_DAYS: Record<string, number> = {
   'test-ean-canary': 14,
 };
 
-function authorised(req: NextRequest): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return process.env.NODE_ENV !== 'production';
-  const header = req.headers.get('authorization');
-  return header === `Bearer ${secret}`;
-}
-
 export async function POST(req: NextRequest, ctx: { params: Promise<{ connector: string }> }) {
-  if (!authorised(req)) return NextResponse.json({ error: 'unauthorised' }, { status: 401 });
+  if (!isCronAuthorised(req)) return NextResponse.json({ error: 'unauthorised' }, { status: 401 });
 
   const { connector: id } = await ctx.params;
   const url = new URL(req.url);

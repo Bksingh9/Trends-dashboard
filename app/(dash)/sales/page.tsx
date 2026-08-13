@@ -3,7 +3,7 @@ import { salesModule } from '@/lib/services/modules';
 import { KpiStrip } from '@/components/kpi/KpiCard';
 import { TrendLine } from '@/components/charts/TrendLine';
 import { Column, DataTable, ModuleHeader } from '@/components/table/DataTable';
-import { formatCount, formatINR, formatPct } from '@/lib/format/currency';
+import { formatCount, formatINR } from '@/lib/format/currency';
 import { trailingWindow } from '@/lib/format/dates';
 
 export const dynamic = 'force-dynamic';
@@ -121,6 +121,9 @@ export default async function SalesPage() {
               );
             })}
           </ul>
+          <p className="mt-3 text-2xs text-[var(--text-muted)]">
+            Source: {mod.sources[0]} · net order value, confirmed orders only
+          </p>
         </figure>
       </div>
 

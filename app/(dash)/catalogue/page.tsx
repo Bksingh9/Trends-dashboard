@@ -181,6 +181,10 @@ export default async function CataloguePage() {
               </li>
             ))}
           </ul>
+          <p className="mt-3 text-2xs text-[var(--text-muted)]">
+            Source: fact_catalogue_gap × dim_product (bq-catalogue-master) · reason is a hypothesis
+            from the catalogue-master join, confirmed by a human in the register&rsquo;s status field
+          </p>
         </figure>
 
         <figure className="rounded border border-[var(--color-edge)] bg-[var(--surface)] p-4">
@@ -222,6 +226,10 @@ export default async function CataloguePage() {
               ))}
             </ul>
           </div>
+          <p className="mt-3 text-2xs text-[var(--text-muted)]">
+            Source: fact_catalogue_gap (aging) · fact_store_visit_audit (visits) · auditor shelf
+            samples are a different measurement from scan-observed coverage (§16.5.2)
+          </p>
         </figure>
       </div>
 

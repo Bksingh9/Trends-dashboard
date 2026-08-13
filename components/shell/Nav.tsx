@@ -82,7 +82,10 @@ export function MobileNav() {
   const items = NAV.filter((n) => n.href === '/' || n.href === '/stores');
   return (
     <nav
-      aria-label="Modules"
+      // Distinct from the desktop rail's label: two navigation landmarks with
+      // the same accessible name are ambiguous to a screen reader, and they
+      // make role-based selectors resolve to both.
+      aria-label="Modules (compact)"
       className="flex gap-1 border-b border-[var(--color-edge)] bg-[var(--surface)] p-2 md:hidden"
     >
       {items.map((i) => (

@@ -12,7 +12,7 @@ export async function GET(req: NextRequest) {
     return json(
       envelope(
         { daily: mod.data.daily, reasons: mod.data.reasons, ageBuckets: mod.data.ageBuckets, storeCoverage: mod.data.storeCoverage },
-        { metrics: mod.kpis, window: p.window, warnings: mod.warnings },
+        { metrics: mod.kpis, window: p.window, warnings: [...p.warnings, ...mod.warnings] },
       ),
     );
   } catch (e) {

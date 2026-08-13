@@ -51,7 +51,7 @@ export function KpiCard({ metric, compareLabel, size = 'md', className, href }: 
     <Wrapper
       {...(href ? { href } : {})}
       className={cn(
-        'group flex flex-col justify-between rounded border border-[var(--color-edge)] bg-[var(--surface)] p-4',
+        'group flex min-w-0 flex-col justify-between rounded border border-[var(--color-edge)] bg-[var(--surface)] p-4',
         href && 'transition-colors hover:border-[var(--color-ion)]/60',
         metric.state === 'fixture' && 'fixture-stripe',
         className,
@@ -60,7 +60,7 @@ export function KpiCard({ metric, compareLabel, size = 'md', className, href }: 
       {/* min-height keeps values aligned across a row when a label wraps to two
           lines — a ragged KPI strip is harder to scan at a glance. */}
       <div className="mb-3 flex min-h-8 items-start justify-between gap-2">
-        <div className="flex items-start gap-1.5">
+        <div className="flex min-w-0 items-start gap-1.5">
           <span className="label">{metric.label}</span>
           {metric.ambiguous && metric.caveat && <AmbiguityMarker reason={metric.caveat} />}
           {!metric.ambiguous && metric.caveat && <CautionMarker reason={metric.caveat} />}
@@ -68,7 +68,7 @@ export function KpiCard({ metric, compareLabel, size = 'md', className, href }: 
         <StatePill state={metric.state} />
       </div>
 
-      <div className="flex items-baseline gap-2">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-2">
         <span
           className={cn('num font-medium', valueSize)}
           title={`${metric.formula}${metric.value == null ? ' — no value available' : ''}`}
@@ -88,8 +88,11 @@ export function KpiCard({ metric, compareLabel, size = 'md', className, href }: 
           last-refreshed time (rule 2, §6.3, §14.5). */}
       <dl className="mt-3 space-y-0.5 border-t border-[var(--color-edge)] pt-2 text-2xs text-[var(--text-muted)]">
         <div className="flex justify-between gap-2">
-          <dt>Source</dt>
-          <dd className="truncate text-right" title={metric.source}>
+          <dt className="shrink-0">Source</dt>
+          {/* min-w-0 is what lets `truncate` actually truncate: without it the
+              flex item refuses to shrink below its content width and drags the
+              whole card past the viewport on a phone. */}
+          <dd className="min-w-0 truncate text-right" title={metric.source}>
             {metric.source}
           </dd>
         </div>

@@ -47,15 +47,24 @@ export class TestEanCanaryConnector extends BaseConnector<CanaryRow, CanaryRow> 
   protected async extract(w: DateWindow): Promise<CanaryRow[]> {
     const { getDb } = await import('@/lib/db/client');
     const { factScanDaily } = await import('@/lib/db/schema');
-    const { inArray, desc } = await import('drizzle-orm');
+    const { and, gte, lte, inArray, desc } = await import('drizzle-orm');
     const db = getDb();
     if (!db) return [];
 
     const eans = TEST_EANS.map((t) => t.ean);
+    // Bounded by the window on purpose. Unbounded, `lastActualResult` could come
+    // from a scan months old and read as current — a canary reporting a stale
+    // "as expected" is worse than no canary, because it actively reassures.
     const rows = await db
       .select()
       .from(factScanDaily)
-      .where(inArray(factScanDaily.ean, eans))
+      .where(
+        and(
+          inArray(factScanDaily.ean, eans),
+          gte(factScanDaily.dateKey, w.start),
+          lte(factScanDaily.dateKey, w.end),
+        ),
+      )
       .orderBy(desc(factScanDaily.dateKey));
 
     return this.buildRows(
@@ -121,7 +130,9 @@ export class TestEanCanaryConnector extends BaseConnector<CanaryRow, CanaryRow> 
 
   /** Fixture path reads the synthetic scan table, so the canary works in Phase 0. */
   protected fixture(w: DateWindow): CanaryRow[] {
-    const scans = fixtureScanRows(w.start ? w : trailingWindow(14));
+    // The canary reads whatever window it was given; falling back to 14 days
+    // only when called without one.
+    const scans = fixtureScanRows(w?.start && w?.end ? w : trailingWindow(14));
     const relevant = scans.filter((s) => TEST_EANS.some((t) => t.ean === s.ean));
     return this.buildRows(relevant.map((s) => ({ ean: s.ean, result: s.result, dateKey: s.dateKey })));
   }

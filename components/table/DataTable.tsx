@@ -36,14 +36,27 @@ export function DataTable<T>({
   className?: string;
 }) {
   return (
-    <div className={cn('rounded border border-[var(--color-edge)] bg-[var(--surface)]', className)}>
+    // min-w-0 is load-bearing: this is usually a grid or flex item, and those
+    // default to `min-width: auto`, so the item sizes to the table's intrinsic
+    // width and drags the page past the viewport. The child's `overflow-auto`
+    // cannot rescue it, because by then the parent is already too wide.
+    <div className={cn('min-w-0 rounded border border-[var(--color-edge)] bg-[var(--surface)]', className)}>
       {caption && (
         <div className="flex items-baseline justify-between gap-3 border-b border-[var(--color-edge)] px-3 py-2">
           <span className="label">{caption}</span>
           <span className="num text-2xs text-[var(--text-muted)]">{rows.length} rows</span>
         </div>
       )}
-      <div className="overflow-auto" style={{ maxHeight }}>
+      {/* tabIndex makes the scroll container reachable by keyboard. Without it
+          a keyboard user can tab to the links inside the table but cannot
+          scroll it — and these tables are the NOC's primary working surface. */}
+      <div
+        className="overflow-auto"
+        style={{ maxHeight }}
+        tabIndex={0}
+        role="region"
+        aria-label={caption ? `${caption}, scrollable` : 'Scrollable table'}
+      >
         <table className="data-table w-full text-sm">
           <thead>
             <tr className="border-b border-[var(--color-edge)]">
@@ -125,13 +138,15 @@ export function ModuleHeader({
           <h1 className="display text-xl">{title}</h1>
           <p className="mt-0.5 text-xs text-[var(--text-muted)]">{question}</p>
         </div>
-        <div className="text-right text-2xs text-[var(--text-muted)]">
+        {/* max-w-md (448px) exceeds a 412px phone viewport, so it is capped to
+            the container below sm and only widens once there is room. */}
+        <div className="min-w-0 max-w-full text-2xs text-[var(--text-muted)] sm:text-right">
           {window && (
             <div className="num">
               {window.start} → {window.end} IST
             </div>
           )}
-          <div className="max-w-md truncate" title={sources.join(' · ')}>
+          <div className="max-w-full truncate sm:max-w-md" title={sources.join(' · ')}>
             {sources.join(' · ')}
           </div>
         </div>

@@ -10,7 +10,6 @@
  */
 import { config } from '@/lib/config';
 import { rowVolume, uniqueness } from '@/lib/assertions';
-import type { DateWindow } from '@/lib/format/dates';
 import { fixtureIssues, type IssueRow } from '@/fixtures/business';
 import { WORKSTREAMS } from '@/fixtures/baselines';
 import { BaseConnector } from './base';
@@ -225,7 +224,7 @@ export class JiraConnector extends BaseConnector<JiraIssue, IssueRow> {
     return { rowsIngested: rows.length, table: 'fact_issues' };
   }
 
-  protected fixture(_w: DateWindow): IssueRow[] {
+  protected fixture(): IssueRow[] {
     return fixtureIssues();
   }
 

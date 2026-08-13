@@ -10,7 +10,6 @@
 import { config } from '@/lib/config';
 import { cardinality, nullRate, rowVolume, uniqueness } from '@/lib/assertions';
 import { normalizeStoreCode, normalizeStoreId } from '@/lib/format/keys';
-import type { DateWindow } from '@/lib/format/dates';
 import { FIXTURE_STORES, type FixtureStore } from '@/fixtures/stores';
 import { getAccessToken, isGcpConfigured } from '@/lib/gcp/auth';
 import { BaseConnector } from './base';
@@ -181,7 +180,7 @@ export class SheetsStoreMasterConnector extends BaseConnector<SheetRow, FixtureS
     return { rowsIngested: clean.length, table: 'dim_store' };
   }
 
-  protected fixture(_w: DateWindow): FixtureStore[] {
+  protected fixture(): FixtureStore[] {
     return FIXTURE_STORES;
   }
 
