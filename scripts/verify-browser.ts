@@ -18,6 +18,7 @@ const ROUTES = [
   { path: '/', name: 'hub', expect: ['Is Companion healthy today?', 'Scan strip'] },
   { path: '/sales', name: 'sales', expect: ['Sales', 'Revenue waterfall'] },
   { path: '/journey', name: 'journey', expect: ['Journey', 'Journey funnel'] },
+  { path: '/journey/events', name: 'journey-events', expect: ['Event dictionary', 'Instrumentation backlog'] },
   { path: '/stores', name: 'stores', expect: ['Stores', 'Store operating table'] },
   { path: '/catalogue', name: 'catalogue', expect: ['Catalogue', 'Three coverage measurements'] },
   { path: '/app-health', name: 'app-health', expect: ['App Health', 'App Health Score'] },

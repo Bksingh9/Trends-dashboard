@@ -1,0 +1,69 @@
+# Restores the §6.4 refresh cadence on a Vercel Hobby plan, which caps cron jobs
+# at two per day. These are ordinary authenticated POSTs to /api/cron/*, so the
+# scheduler is interchangeable — delete this workflow if you move to Vercel Pro
+# and put the full cron set back in vercel.json.
+#
+# Required repository secrets:
+#   DASHBOARD_URL  e.g. https://companion-trends.vercel.app
+#   CRON_SECRET    the same value set in the Vercel environment
+name: ETL schedule
+
+on:
+  schedule:
+    # All times UTC. IST is UTC+5:30.
+    - cron: '0 * * * *' # hourly — orders, GA4 funnel, latency
+    - cron: '*/15 * * * *' # 15 min — Sentry, GCP error logs
+    - cron: '*/30 * * * *' # 30 min — catalogue report, Jira, alert stream
+    - cron: '30 0 * * *' # 06:00 IST — store master
+    - cron: '30 2 * * *' # 08:00 IST — daily brief to Slack
+    - cron: '0 20 * * *' # 01:30 IST — test EAN canary
+  workflow_dispatch:
+    inputs:
+      connector:
+        description: 'Connector id, or "all"'
+        required: true
+        default: 'all'
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Select connectors for this schedule
+        id: pick
+        run: |
+          case "${{ github.event.schedule }}" in
+            "0 * * * *")      echo "list=bq-orders bq-ga4-events api-latency" >> "$GITHUB_OUTPUT" ;;
+            "*/15 * * * *")   echo "list=sentry gcp-logging" >> "$GITHUB_OUTPUT" ;;
+            "*/30 * * * *")   echo "list=slack-catalogue-report jira slack-alerts" >> "$GITHUB_OUTPUT" ;;
+            "30 0 * * *")     echo "list=sheets-store-master bq-catalogue-master" >> "$GITHUB_OUTPUT" ;;
+            "0 20 * * *")     echo "list=test-ean-canary" >> "$GITHUB_OUTPUT" ;;
+            "30 2 * * *")     echo "list=" >> "$GITHUB_OUTPUT" ;;
+            *)                echo "list=${{ inputs.connector }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Run connectors
+        if: steps.pick.outputs.list != ''
+        env:
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          failed=0
+          for c in ${{ steps.pick.outputs.list }}; do
+            echo "→ $c"
+            code=$(curl -sS -o /tmp/out.json -w '%{http_code}' -X POST \
+              -H "Authorization: Bearer $CRON_SECRET" \
+              "$DASHBOARD_URL/api/cron/$c")
+            cat /tmp/out.json | head -c 2000; echo
+            # A connector that fails its assertion gate returns 200 with ok:false
+            # and keeps serving the last good snapshot — that is correct
+            # behaviour, and it alerts through Slack rather than here. Only an
+            # HTTP-level failure fails this job.
+            [ "$code" -ge 400 ] && { echo "::error::$c returned HTTP $code"; failed=1; }
+          done
+          exit $failed
+
+      - name: Post the daily brief
+        if: github.event.schedule == '30 2 * * *'
+        env:
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: curl -sS "$DASHBOARD_URL/api/insights?post=slack" | head -c 2000

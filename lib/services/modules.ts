@@ -14,6 +14,7 @@ import {
   gapAgeBuckets,
   issues as issueMetrics,
   journey,
+  median,
   metricValue,
   ppDelta,
   relativeDelta,
@@ -118,6 +119,12 @@ export async function salesModule(w: DateWindow = trailingWindow(90)): Promise<M
     metricValue('repeat_rate', business.repeatRate(agg), {
       ...meta,
       deltaPp: ppDelta(business.repeatRate(agg), business.repeatRate(prevAgg)),
+    }),
+    // Like-for-like on days elapsed, so a month-to-date figure is not compared
+    // against a full previous month.
+    metricValue('revenue_mom', relativeDelta(business.netRevenue(agg), business.netRevenue(prevAgg)), {
+      ...meta,
+      sourceOverride: 'derived — month-to-date vs same period last month',
     }),
   ];
 
@@ -246,6 +253,14 @@ export async function journeyModule(w: DateWindow = trailingWindow(28)): Promise
       ...meta,
       deltaPp: ppDelta(journey.sessionConversion(steps), journey.sessionConversion(prevSteps)),
     }),
+    // Needs per-session event sequencing, which fact_funnel_daily does not carry
+    // — it is a daily aggregate. Surfaced as missing rather than omitted, so the
+    // gap is visible instead of silently absent (§16.4 session explorer).
+    metricValue('time_to_order_p50', null, {
+      state: 'missing',
+      fetchedAt: funnel.fetchedAt,
+      sourceOverride: 'requires session-level GA4 extraction — not yet wired',
+    }),
   ];
 
   const labelled = FUNNEL_STEPS.map((def) => {
@@ -351,6 +366,13 @@ export async function storesModule(w: DateWindow = trailingWindow(28)): Promise<
       active === 0 ? null : rows.reduce((a, r) => a + r.orders7d, 0) / active / 7,
       { ...meta },
     ),
+    // Median across live stores; the per-store value is a column on the
+    // operating table and the sort key for the dark-store worklist.
+    metricValue(
+      'days_since_last_order',
+      median(rows.map((r) => r.daysSinceLastOrder).filter((d): d is number => d != null)),
+      { ...meta },
+    ),
   ];
 
   const darkWorklist = rows
@@ -442,10 +464,31 @@ export async function catalogueModule(
     : null;
 
   // §16.5.2 — three different measurements that will disagree. Never blend them.
+  const todayRow = daily.rows.find((d) => d.dateKey === latestDay);
+
+  // §16.5.1 — rejected scans are recorded, never silently discarded.
+  const { fixtureScanRejections } = await import('@/fixtures/business');
+  const rejections = fixtureScanRejections(w);
+  const rejectedScans = rejections.reduce((a, r) => a + r.scanCount, 0);
+  const rejectionRate = cov.totalScans === 0 ? null : rejectedScans / (cov.totalScans + rejectedScans);
+
   const { STORE_VISIT_AUDITS } = await import('@/fixtures/baselines');
   const auditScanned = STORE_VISIT_AUDITS.reduce((a, v) => a + v.itemsScanned, 0);
   const auditFailed = STORE_VISIT_AUDITS.reduce((a, v) => a + v.itemsFailed, 0);
   const auditedCoverage = auditScanned ? (auditScanned - auditFailed) / auditScanned : null;
+
+  // Worst-store coverage is a KPI, so compute the per-store series first.
+  const byStore = coverageByStore(scans.rows);
+  const storeById = new Map(stores.rows.map((s) => [s.storeId, s]));
+  const storeCoverage = [...byStore.entries()]
+    .map(([storeId, v]) => ({
+      storeId,
+      storeName: storeById.get(storeId)?.storeName ?? storeId,
+      coverage: v.scans ? (v.scans - v.failed) / v.scans : null,
+      scans: v.scans,
+      failed: v.failed,
+    }))
+    .sort((a, b) => (a.coverage ?? 1) - (b.coverage ?? 1));
 
   const kpis: MetricValue[] = [
     metricValue('unique_coverage', cov.uniqueCoverage, {
@@ -466,6 +509,33 @@ export async function catalogueModule(
     metricValue('missing_new', newToday, { ...meta }),
     metricValue('missing_resolved', resolved7d, { ...meta }),
     metricValue('missing_age_p50', medianAge, { ...meta }),
+    // §16.5.1 — junk in the `ean` param inflates the missing register and drags
+    // reported coverage down, so the rejection rate is shown next to coverage
+    // rather than buried.
+    metricValue('scan_rejection_rate', rejectionRate, {
+      ...meta,
+      sourceOverride: 'fact_scan_rejected_daily (bq-ga4-events)',
+    }),
+    // §7.7 — the feed is deferred (§13.9). Surfaced as missing so the question
+    // "of what's on the floor, how much is scannable" is visibly unanswered,
+    // rather than quietly absent.
+    metricValue('true_coverage', null, {
+      state: 'missing',
+      fetchedAt: scans.fetchedAt,
+      sourceOverride: 'SAP catalogue master + RRA inventory — not wired (MODULE_TRUE_COVERAGE=false)',
+    }),
+    // Grouped by store, the metric is a series; the headline is the worst store,
+    // because that is the number that distinguishes a store-local sync issue
+    // from a systemic catalogue one (§28.5 store_local).
+    metricValue('store_coverage', storeCoverage[0]?.coverage ?? null, {
+      ...meta,
+      sourceOverride: 'fact_scan_daily grouped by store_id — worst store in window',
+    }),
+    metricValue('report_generated', todayRow?.reportGenerated === true ? 1 : 0, {
+      state: daily.state,
+      fetchedAt: daily.fetchedAt,
+      sourceOverride: daily.source,
+    }),
   ];
 
   const reasonCounts = new Map<string, { direction: string | null; count: number }>();
@@ -474,20 +544,6 @@ export async function catalogueModule(
     cur.count++;
     reasonCounts.set(g.suspectedReason, cur);
   }
-
-  const byStore = coverageByStore(scans.rows);
-  const storeById = new Map(stores.rows.map((s) => [s.storeId, s]));
-  const storeCoverage = [...byStore.entries()]
-    .map(([storeId, v]) => ({
-      storeId,
-      storeName: storeById.get(storeId)?.storeName ?? storeId,
-      coverage: v.scans ? (v.scans - v.failed) / v.scans : null,
-      scans: v.scans,
-      failed: v.failed,
-    }))
-    .sort((a, b) => (a.coverage ?? 1) - (b.coverage ?? 1));
-
-  const todayRow = daily.rows.find((d) => d.dateKey === addDays(today, -1));
 
   return {
     kpis,
@@ -542,6 +598,12 @@ export async function appHealthModule(w: DateWindow = trailingWindow(28)): Promi
     t,
   );
 
+  // Share of orders on the current host app version (§1: AJIO 9.44).
+  const { getOrders: getOrdersForVersions } = await import('@/lib/data/repository');
+  const versionOrders = await getOrdersForVersions(w);
+  const onLatest = versionOrders.rows.filter((o) => o.appVersion === '9.44').length;
+  const releaseAdoption = versionOrders.rows.length ? onLatest / versionOrders.rows.length : null;
+
   const meta = { state: health.state, fetchedAt: health.fetchedAt };
   const worstP95 = latestLatency.reduce<number | null>(
     (a, l) => (a == null || l.p95Ms > a ? l.p95Ms : a),
@@ -562,6 +624,20 @@ export async function appHealthModule(w: DateWindow = trailingWindow(28)): Promi
     metricValue('p95_latency', worstP95, { ...meta, sourceOverride: latency.source }),
     metricValue('error_log_volume', latest?.gcpErrorLogCount ?? null, { ...meta }),
     metricValue('p0_open', p0Open, { state: issues.state, fetchedAt: issues.fetchedAt, sourceOverride: issues.source }),
+    // Version fragmentation is a real support cost, so the share on the current
+    // release is a first-class number rather than a chart detail.
+    metricValue('release_adoption', releaseAdoption, {
+      ...meta,
+      sourceOverride: 'fact_orders.app_version — cross-checked against Sentry releases',
+    }),
+    // §5.6 — no backend feed exists for this yet. Shown as missing rather than
+    // omitted: a known platform-specific issue with no measurement is itself
+    // worth seeing on the page.
+    metricValue('geofence_delivery_rate', null, {
+      state: 'missing',
+      fetchedAt: health.fetchedAt,
+      sourceOverride: 'backend geofence delivery feed — not yet available',
+    }),
   ];
 
   return {

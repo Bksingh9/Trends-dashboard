@@ -1,4 +1,5 @@
 /** §4.3 — Journey & Funnel. */
+import Link from 'next/link';
 import { journeyModule } from '@/lib/services/modules';
 import { KpiStrip } from '@/components/kpi/KpiCard';
 import { DropoffRanking, FunnelChart } from '@/components/charts/FunnelChart';
@@ -50,6 +51,9 @@ export default async function JourneyPage() {
               </li>
             ))}
           </ul>
+          <Link href="/journey/events" className="mt-3 inline-block text-2xs text-[var(--color-ion)] underline">
+            Full event dictionary and instrumentation backlog →
+          </Link>
         </section>
       )}
 

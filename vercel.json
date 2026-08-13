@@ -3,17 +3,7 @@
   "framework": "nextjs",
   "regions": ["bom1"],
   "crons": [
-    { "path": "/api/cron/bq-orders", "schedule": "0 * * * *" },
-    { "path": "/api/cron/bq-ga4-events", "schedule": "15 * * * *" },
-    { "path": "/api/cron/slack-catalogue-report", "schedule": "*/30 * * * *" },
-    { "path": "/api/cron/sheets-store-master", "schedule": "30 0 * * *" },
-    { "path": "/api/cron/bq-catalogue-master", "schedule": "30 23 * * *" },
-    { "path": "/api/cron/sentry", "schedule": "*/15 * * * *" },
-    { "path": "/api/cron/jira", "schedule": "*/30 * * * *" },
-    { "path": "/api/cron/gcp-logging", "schedule": "*/15 * * * *" },
-    { "path": "/api/cron/api-latency", "schedule": "20 * * * *" },
-    { "path": "/api/cron/slack-alerts", "schedule": "*/30 * * * *" },
-    { "path": "/api/cron/test-ean-canary", "schedule": "0 20 * * *" },
+    { "path": "/api/cron/all", "schedule": "0 1 * * *" },
     { "path": "/api/insights?post=slack", "schedule": "30 2 * * *" }
   ]
 }

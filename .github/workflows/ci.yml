@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      # Includes the §1 and §18.7 baseline reconciliations and the §28.8 AI
+      # eval scenarios. A change that breaks the reported figures fails here.
+      - run: npm test
+      - run: npm run build
+
+      - name: Verify every route in a real browser
+        run: |
+          npx playwright install --with-deps chromium
+          npx next start -p 3100 &
+          npx wait-on http://127.0.0.1:3100 -t 60000
+          VERIFY_BASE_URL=http://127.0.0.1:3100 npm run verify:browser
+        env:
+          NODE_ENV: production
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: route-screenshots
+          path: docs/screenshots/
+          retention-days: 14

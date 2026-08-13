@@ -360,6 +360,44 @@ export function fixtureIssues(): IssueRow[] {
   return out;
 }
 
+/**
+ * §16.5.1 — rejected scan values per day. Real production data carries junk in
+ * the `ean` param (URLs, placeholders, slugs), and the rejection rate is a
+ * first-class signal: a high rate is an app instrumentation bug, and it distorts
+ * reported coverage in both directions.
+ */
+export interface ScanRejectionRow {
+  dateKey: string;
+  reason: string;
+  scanCount: number;
+  sampleValues: string[];
+}
+
+export function fixtureScanRejections(window: DateWindow): ScanRejectionRow[] {
+  const REASONS: Array<[string, number, string[]]> = [
+    ['url', 0.45, ['https://www.ajio.com/p/12345', 'www.trends.in/item']],
+    ['too_short', 0.22, ['12345', '9078']],
+    ['non_numeric', 0.16, ['SKU-ABC-123']],
+    ['placeholder', 0.1, ['0000000000000']],
+    ['too_long', 0.07, ['123456789012345678']],
+  ];
+  const out: ScanRejectionRow[] = [];
+  for (const dateKey of dateRange(window)) {
+    const rng = makeRng(hashSeed(`reject:${dateKey}`));
+    // ~1.1% of scans, i.e. under the 2% warn threshold but not zero.
+    const total = Math.round(140 + rng() * 90);
+    for (const [reason, share, samples] of REASONS) {
+      out.push({
+        dateKey,
+        reason,
+        scanCount: Math.round(total * share),
+        sampleValues: samples,
+      });
+    }
+  }
+  return out;
+}
+
 /* ── Scan Strip (§10.3) — last 90 minutes at 1-minute resolution ─────────── */
 
 export interface ScanMinute {
