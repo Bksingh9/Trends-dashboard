@@ -1,0 +1,175 @@
+@import 'tailwindcss';
+
+/**
+ * §10 — Design direction.
+ *
+ * The audience is a retail floor operation and the leadership above it. This
+ * should feel like an instrument in that world — a scanner terminal and a till
+ * roll — not a generic SaaS analytics template. One bold move (the Scan Strip),
+ * everything else disciplined.
+ *
+ * Dark is the default surface: this screen lives on a wall-mounted monitor in an
+ * ops room as often as on a laptop.
+ */
+
+@theme {
+  /* §10.1 Tokens */
+  --color-ink: #0f1319; /* base, cool near-black */
+  --color-slab: #171d25; /* raised surface */
+  --color-edge: #262e3a; /* hairline borders */
+  --color-paper: #e9ebe6; /* light surface, thermal receipt stock */
+  --color-muted: #8a94a3; /* secondary text */
+  --color-scan: #2de0a5; /* healthy — scanner-beam green */
+  --color-warn: #ffb020; /* watch */
+  --color-alert: #ff5c46; /* breach */
+  --color-ion: #4c6fff; /* primary interactive */
+
+  --font-display: var(--font-archivo), ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-inter-tight), ui-sans-serif, system-ui, sans-serif;
+  /* §10.2 — IBM Plex Mono for every numeral in the product. Not decoration:
+     tabular figures make columns of orders, coverage percentages and latency
+     values scannable, and the terminal association is honest to what this is. */
+  --font-mono: var(--font-plex-mono), ui-monospace, SFMono-Regular, monospace;
+
+  /* §10.2 type scale: 12 / 14 / 16 / 20 / 28 / 44 */
+  --text-2xs: 0.6875rem;
+  --text-xs: 0.75rem;
+  --text-sm: 0.875rem;
+  --text-base: 1rem;
+  --text-lg: 1.25rem;
+  --text-xl: 1.75rem;
+  --text-2xl: 2.75rem;
+}
+
+:root {
+  --bg: var(--color-ink);
+  --surface: var(--color-slab);
+  --border: var(--color-edge);
+  --text: #e6e9ee;
+  --text-muted: var(--color-muted);
+  color-scheme: dark;
+}
+
+/* Light mode uses --paper. Designed dark-first, per §10.1. */
+[data-theme='light'] {
+  --bg: var(--color-paper);
+  --surface: #ffffff;
+  --border: #d3d7cf;
+  --text: #12161c;
+  --text-muted: #5a6472;
+  color-scheme: light;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+body {
+  font-family: var(--font-sans);
+  font-feature-settings: 'cv02', 'cv03', 'cv04';
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Every numeral in the product is mono and tabular. */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+/* §10.2 — labels at 12 uppercase with letterspacing. */
+.label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+/* §10.4 — keyboard focus visible everywhere. This will be used by people
+   moving fast. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-ion);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* §10.4 — two exceptions to "no decorative animation": the Scan Strip's newest
+   bar entering, and number transitions on refresh. */
+@keyframes scan-bar-in {
+  from {
+    transform: scaleY(0.2);
+    opacity: 0.4;
+  }
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+.scan-bar-newest {
+  transform-origin: bottom;
+  animation: scan-bar-in 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* The hatch used for "not instrumented" and unreachable data — a visible hole
+   is information; an invisible one is a lie about the date range (§18.3). */
+.hatch {
+  background-image: repeating-linear-gradient(
+    45deg,
+    transparent,
+    transparent 4px,
+    var(--color-edge) 4px,
+    var(--color-edge) 5px
+  );
+}
+
+.fixture-stripe {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent,
+    transparent 6px,
+    color-mix(in srgb, var(--color-warn) 14%, transparent) 6px,
+    color-mix(in srgb, var(--color-warn) 14%, transparent) 12px
+  );
+}
+
+table.data-table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+table.data-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-edge);
+  border-radius: 6px;
+}

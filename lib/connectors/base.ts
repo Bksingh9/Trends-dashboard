@@ -1,0 +1,183 @@
+/**
+ * §14.1 — The base connector contract.
+ *
+ * Every connector is a class implementing the same lifecycle. Nothing bypasses
+ * this: `/connectors`, the fixture fallback, the assertion gate, and the run log
+ * all depend on it.
+ *
+ * The lifecycle never throws to the UI. A broken connector degrades to the last
+ * good snapshot or to fixtures, and says which.
+ */
+import { runAssertions, worstLevel } from '@/lib/assertions';
+import type { DateWindow } from '@/lib/format/dates';
+import { classifyError, DEFAULT_RETRY, withRetry, type RetryPolicy } from './retry';
+import { finishRun, startRun, trailingRowCounts } from './run-log';
+import type {
+  Assertion,
+  AssertionVerdict,
+  ConnectorDescriptor,
+  ConnectorResult,
+  CostTier,
+  LoadResult,
+} from './types';
+
+export abstract class BaseConnector<TRow, TNormalised = TRow> {
+  abstract readonly id: string;
+  abstract readonly displayName: string;
+  abstract readonly freshnessSlaMinutes: number;
+  abstract readonly costTier: CostTier;
+  abstract readonly priority: 'P0' | 'P1' | 'P2' | 'P3';
+  /** What this connector powers, for the `/connectors` lineage view (§4.9). */
+  abstract readonly powers: string[];
+  abstract readonly assertions: Assertion<TNormalised>[];
+
+  /** The §13 blocker to name in the UI when `isConfigured()` is false. */
+  readonly blockedBy?: string;
+
+  protected retryPolicy: RetryPolicy = DEFAULT_RETRY;
+
+  /** Pure extraction. No writes, no side effects. */
+  protected abstract extract(w: DateWindow): Promise<TRow[]>;
+
+  /** Row-level normalisation: types, keys, timezone, currency. */
+  protected abstract transform(rows: TRow[]): TNormalised[];
+
+  /** Idempotent upsert into the mart. Must be safe to re-run (§27.5). */
+  protected abstract load(rows: TNormalised[]): Promise<LoadResult>;
+
+  /** Realistic fixture rows (§14.5), derived from the §1 baselines. */
+  protected abstract fixture(w: DateWindow): TNormalised[];
+
+  /** Credentials present and usable. */
+  abstract isConfigured(): boolean;
+
+  descriptor(): ConnectorDescriptor {
+    return {
+      id: this.id,
+      displayName: this.displayName,
+      priority: this.priority,
+      freshnessSlaMinutes: this.freshnessSlaMinutes,
+      costTier: this.costTier,
+      powers: this.powers,
+      blockedBy: this.blockedBy,
+      configured: this.isConfigured(),
+    };
+  }
+
+  async run(w: DateWindow): Promise<ConnectorResult<TNormalised>> {
+    const runId = await startRun(this.id, w);
+    const warnings: string[] = [];
+
+    if (!this.isConfigured()) {
+      return this.fixtureFallback(runId, w, this.blockedBy ?? 'not configured');
+    }
+
+    try {
+      const raw = await withRetry(() => this.extract(w), this.retryPolicy, (attempt, _e, waitMs) => {
+        warnings.push(`retry ${attempt} after ${waitMs}ms`);
+      });
+      const rows = this.transform(raw);
+
+      const verdicts = await runAssertions(this.assertions, rows, {
+        connector: this.id,
+        window: w,
+        trailingRowCounts: await trailingRowCounts(this.id),
+      });
+
+      if (worstLevel(verdicts) === 'fail') {
+        // Mart untouched. Keep serving the last good snapshot (§6.3).
+        await finishRun(runId, {
+          status: 'fail',
+          assertions: verdicts,
+          error: failureSummary(verdicts),
+        });
+        await this.alertConnectorDown(verdicts);
+        return {
+          ok: false,
+          rows: [],
+          meta: this.meta(w, 0, 'cache', [
+            ...warnings,
+            'Hard assertion failed — mart not updated, serving last good snapshot',
+          ]),
+          error: { code: 'assertion_failed', message: failureSummary(verdicts), retryable: false },
+          assertions: verdicts,
+        };
+      }
+
+      const loaded = await this.load(rows);
+      await finishRun(runId, {
+        status: worstLevel(verdicts) === 'warn' ? 'warn' : 'success',
+        rowsIngested: loaded.rowsIngested,
+        assertions: verdicts,
+      });
+
+      return {
+        ok: true,
+        rows,
+        meta: this.meta(w, loaded.rowsIngested, 'live', [
+          ...warnings,
+          ...verdicts.filter((v) => v.level === 'warn').map((v) => v.message),
+        ]),
+        assertions: verdicts,
+      };
+    } catch (e) {
+      const err = classifyError(e);
+      await finishRun(runId, { status: 'fail', error: err.message });
+      // Never throw to the UI.
+      return {
+        ok: false,
+        rows: [],
+        meta: this.meta(w, 0, 'cache', [...warnings, `Connector error: ${err.message}`]),
+        error: err,
+      };
+    }
+  }
+
+  protected async fixtureFallback(
+    runId: number,
+    w: DateWindow,
+    reason: string,
+  ): Promise<ConnectorResult<TNormalised>> {
+    const rows = this.fixture(w);
+    await finishRun(runId, {
+      status: 'warn',
+      rowsIngested: rows.length,
+      error: `Not configured (${reason}) — served fixtures`,
+    });
+    return {
+      ok: true,
+      rows,
+      meta: this.meta(w, rows.length, 'fixture', [`Fixture data — ${reason}`]),
+    };
+  }
+
+  protected meta(
+    w: DateWindow,
+    rowCount: number,
+    source: 'live' | 'cache' | 'fixture',
+    warnings: string[] = [],
+  ) {
+    return {
+      connector: this.id,
+      fetchedAt: new Date().toISOString(),
+      windowStart: w.start,
+      windowEnd: w.end,
+      rowCount,
+      source,
+      warnings,
+    };
+  }
+
+  /** §8.5 — connector hard-failures post to Slack immediately. */
+  protected async alertConnectorDown(verdicts: AssertionVerdict[]): Promise<void> {
+    const { alertConnectorDown } = await import('@/lib/alerts');
+    await alertConnectorDown(this.id, this.displayName, verdicts);
+  }
+}
+
+function failureSummary(verdicts: AssertionVerdict[]): string {
+  return verdicts
+    .filter((v) => v.level === 'fail')
+    .map((v) => `${v.id}: ${v.message}`)
+    .join('; ');
+}

@@ -1,0 +1,629 @@
+/**
+ * Module services: assemble the §5 metrics for each route.
+ *
+ * All metric arithmetic goes through `lib/metrics/compute`; this layer only
+ * chooses windows, joins sources, and attaches provenance. No formulas here.
+ */
+import {
+  aggregateCoverage,
+  aggregateFunnel,
+  aggregateOrders,
+  appHealthScore,
+  business,
+  coverageByStore,
+  gapAgeBuckets,
+  issues as issueMetrics,
+  journey,
+  metricValue,
+  ppDelta,
+  relativeDelta,
+  rollupStates,
+  rollupStores,
+  type MetricValue,
+  type StoreRollup,
+} from '@/lib/metrics/compute';
+import {
+  getAppHealth,
+  getCatalogueDaily,
+  getFunnel,
+  getGaps,
+  getIssues,
+  getLatency,
+  getOrders,
+  getScans,
+  getStoreOps,
+  getStores,
+  type Sourced,
+} from '@/lib/data/repository';
+import { getThresholds } from '@/lib/db/settings';
+import {
+  addDays,
+  dateRange,
+  previousPeriod,
+  sameWeekdayLastWeek,
+  todayIST,
+  trailingWindow,
+  type DateWindow,
+} from '@/lib/format/dates';
+import { config } from '@/lib/config';
+import { FUNNEL_STEPS } from '@/fixtures/business';
+import type { DataSourceState } from '@/lib/connectors/types';
+
+export interface ModuleResult<T> {
+  kpis: MetricValue[];
+  data: T;
+  window: DateWindow;
+  warnings: string[];
+  state: DataSourceState;
+  sources: string[];
+}
+
+function worstState(...states: DataSourceState[]): DataSourceState {
+  const rank: Record<DataSourceState, number> = {
+    live: 0,
+    cache: 1,
+    stale: 2,
+    fixture: 3,
+    not_instrumented: 4,
+    missing: 5,
+  };
+  return states.reduce((a, b) => (rank[b] > rank[a] ? b : a), 'live' as DataSourceState);
+}
+
+/* ── /sales ──────────────────────────────────────────────────────────────── */
+
+export interface SalesData {
+  daily: Array<{ dateKey: string; orders: number; egmv: number; netRevenue: number }>;
+  waterfall: { gross: number; discount: number; coupon: number; net: number };
+  valueHistogram: Array<{ bucket: string; count: number }>;
+  storeMatrix: Array<{ storeId: string; storeCode: string; storeName: string; city: string; state: string; orders: number; revenue: number }>;
+  stateMatrix: Array<{ state: string; region: string; orders: number; revenue: number; stores: number }>;
+  newVsRepeat: Array<{ dateKey: string; newCustomers: number; repeatCustomers: number }>;
+}
+
+export async function salesModule(w: DateWindow = trailingWindow(90)): Promise<ModuleResult<SalesData>> {
+  const [orders, stores] = await Promise.all([getOrders(w), getStores()]);
+  const prev = previousPeriod(w);
+  const prevOrders = await getOrders(prev);
+
+  const agg = aggregateOrders(orders.rows);
+  const prevAgg = aggregateOrders(prevOrders.rows);
+  const meta = { state: orders.state, fetchedAt: orders.fetchedAt };
+
+  const kpis: MetricValue[] = [
+    metricValue('orders', business.orders(agg), {
+      ...meta,
+      deltaVsPrev: relativeDelta(business.orders(agg), business.orders(prevAgg)),
+    }),
+    metricValue('orders_confirmed', business.ordersConfirmed(agg), { ...meta }),
+    metricValue('egmv', business.egmv(agg), {
+      ...meta,
+      deltaVsPrev: relativeDelta(business.egmv(agg), business.egmv(prevAgg)),
+    }),
+    metricValue('net_revenue', business.netRevenue(agg), {
+      ...meta,
+      deltaVsPrev: relativeDelta(business.netRevenue(agg), business.netRevenue(prevAgg)),
+    }),
+    metricValue('aov', business.aov(agg), {
+      ...meta,
+      deltaVsPrev: relativeDelta(business.aov(agg), business.aov(prevAgg)),
+    }),
+    metricValue('units_per_order', business.unitsPerOrder(agg), { ...meta }),
+    metricValue('discount_rate', business.discountRate(agg), {
+      ...meta,
+      deltaPp: ppDelta(business.discountRate(agg), business.discountRate(prevAgg)),
+    }),
+    metricValue('coupon_attach_rate', business.couponAttachRate(agg), { ...meta }),
+    metricValue('new_customers', business.newCustomers(agg), { ...meta }),
+    metricValue('repeat_rate', business.repeatRate(agg), {
+      ...meta,
+      deltaPp: ppDelta(business.repeatRate(agg), business.repeatRate(prevAgg)),
+    }),
+  ];
+
+  const byDate = new Map<string, typeof orders.rows>();
+  for (const o of orders.rows) {
+    const list = byDate.get(o.orderDate) ?? [];
+    list.push(o);
+    byDate.set(o.orderDate, list);
+  }
+  const daily = dateRange(w).map((dateKey) => {
+    const a = aggregateOrders(byDate.get(dateKey) ?? []);
+    return { dateKey, orders: a.orders, egmv: a.egmv, netRevenue: a.netRevenue };
+  });
+
+  const newVsRepeat = dateRange(w).map((dateKey) => {
+    const a = aggregateOrders(byDate.get(dateKey) ?? []);
+    return { dateKey, newCustomers: a.newCustomers, repeatCustomers: a.repeatCustomers };
+  });
+
+  // Order value distribution — spot the ₹0 and outlier orders. These have been a
+  // real data-quality tell (§4.2).
+  const buckets = [0, 250, 500, 1000, 2000, 4000, 8000, Infinity];
+  const valueHistogram = buckets.slice(0, -1).map((lo, i) => {
+    const hi = buckets[i + 1];
+    return {
+      bucket: hi === Infinity ? `₹${lo}+` : `₹${lo}–${hi}`,
+      count: orders.rows.filter((o) => o.netValue >= lo && o.netValue < hi).length,
+    };
+  });
+
+  const storeById = new Map(stores.rows.map((s) => [s.storeId, s]));
+  const byStore = new Map<string, { orders: number; revenue: number }>();
+  for (const o of orders.rows) {
+    const cur = byStore.get(o.storeId) ?? { orders: 0, revenue: 0 };
+    cur.orders++;
+    cur.revenue += o.netValue;
+    byStore.set(o.storeId, cur);
+  }
+
+  const storeMatrix = [...byStore.entries()]
+    .map(([storeId, v]) => {
+      const s = storeById.get(storeId);
+      return {
+        storeId,
+        storeCode: s?.storeCode ?? '',
+        storeName: s?.storeName ?? storeId,
+        city: s?.city ?? '',
+        state: s?.state ?? '',
+        orders: v.orders,
+        revenue: v.revenue,
+      };
+    })
+    .sort((a, b) => b.revenue - a.revenue);
+
+  // State-level rollup — the geographic grain leadership asks for.
+  const byState = new Map<string, { region: string; orders: number; revenue: number; stores: Set<string> }>();
+  for (const row of storeMatrix) {
+    if (!row.state) continue;
+    const s = storeById.get(row.storeId);
+    const cur = byState.get(row.state) ?? { region: s?.region ?? '', orders: 0, revenue: 0, stores: new Set<string>() };
+    cur.orders += row.orders;
+    cur.revenue += row.revenue;
+    cur.stores.add(row.storeId);
+    byState.set(row.state, cur);
+  }
+  const stateMatrix = [...byState.entries()]
+    .map(([state, v]) => ({ state, region: v.region, orders: v.orders, revenue: v.revenue, stores: v.stores.size }))
+    .sort((a, b) => b.revenue - a.revenue);
+
+  return {
+    kpis,
+    data: {
+      daily,
+      waterfall: {
+        gross: agg.egmv,
+        discount: agg.discountTotal,
+        coupon: agg.couponTotal,
+        net: agg.netRevenue,
+      },
+      valueHistogram,
+      storeMatrix,
+      stateMatrix,
+      newVsRepeat,
+    },
+    window: w,
+    warnings: orders.warnings,
+    state: orders.state,
+    sources: [orders.source, stores.source],
+  };
+}
+
+/* ── /journey ────────────────────────────────────────────────────────────── */
+
+export interface JourneyData {
+  steps: Array<{ step: string; label: string; count: number | null; conversion: number | null; isInstrumented: boolean }>;
+  dropoff: ReturnType<typeof journey.stepDropoff>;
+  byPlatform: Array<{ platform: string; sessions: number; purchases: number; conversion: number | null }>;
+  instrumentationGaps: Array<{ step: string; label: string; note: string }>;
+}
+
+export async function journeyModule(w: DateWindow = trailingWindow(28)): Promise<ModuleResult<JourneyData>> {
+  const funnel = await getFunnel(w);
+  const prevFunnel = await getFunnel(previousPeriod(w));
+  const steps = aggregateFunnel(funnel.rows);
+  const prevSteps = aggregateFunnel(prevFunnel.rows);
+  const meta = { state: funnel.state, fetchedAt: funnel.fetchedAt };
+
+  const kpis: MetricValue[] = [
+    metricValue('scan_success_rate', journey.scanSuccessRate(steps), {
+      ...meta,
+      deltaPp: ppDelta(journey.scanSuccessRate(steps), journey.scanSuccessRate(prevSteps)),
+    }),
+    metricValue('atc_rate', journey.atcRate(steps), {
+      ...meta,
+      deltaPp: ppDelta(journey.atcRate(steps), journey.atcRate(prevSteps)),
+    }),
+    metricValue('checkout_rate', journey.checkoutRate(steps), {
+      ...meta,
+      deltaPp: ppDelta(journey.checkoutRate(steps), journey.checkoutRate(prevSteps)),
+    }),
+    metricValue('payment_success_rate', journey.paymentSuccessRate(steps), {
+      ...meta,
+      deltaPp: ppDelta(journey.paymentSuccessRate(steps), journey.paymentSuccessRate(prevSteps)),
+    }),
+    metricValue('session_conversion', journey.sessionConversion(steps), {
+      ...meta,
+      deltaPp: ppDelta(journey.sessionConversion(steps), journey.sessionConversion(prevSteps)),
+    }),
+  ];
+
+  const labelled = FUNNEL_STEPS.map((def) => {
+    const s = steps.find((x) => x.step === def.step);
+    const prevIdx = def.order - 2;
+    const prevDef = FUNNEL_STEPS[prevIdx];
+    const prevAgg = prevDef ? steps.find((x) => x.step === prevDef.step) : undefined;
+    const instrumented = s?.isInstrumented ?? false;
+    const count = instrumented ? (s?.eventCount ?? 0) : null;
+    const conversion =
+      instrumented && prevAgg?.isInstrumented && prevAgg.eventCount > 0 && count != null
+        ? count / prevAgg.eventCount
+        : null;
+    return { step: def.step, label: def.label, count, conversion, isInstrumented: instrumented };
+  });
+
+  // §5.2 / §16.9 — gaps are listed explicitly. Each is a sprint ticket waiting
+  // to be written, and the dashboard's job is to make that visible.
+  const instrumentationGaps = labelled
+    .filter((s) => !s.isInstrumented)
+    .map((s) => ({
+      step: s.step,
+      label: s.label,
+      note:
+        s.step === 'invoice_detag'
+          ? 'A6 — no invoice/de-tag event has ever been confirmed. The final step of the core journey is invisible today.'
+          : 'Expected event has no volume in the GA4 export.',
+    }));
+
+  const platforms = ['Android', 'iOS'];
+  const byPlatform = platforms.map((platform) => {
+    const rows = funnel.rows.filter((r) => r.platform === platform);
+    const agg = aggregateFunnel(rows);
+    const sessions = agg.find((s) => s.step === 'session_start')?.eventCount ?? 0;
+    const purchases = agg.find((s) => s.step === 'purchase')?.eventCount ?? 0;
+    return { platform, sessions, purchases, conversion: sessions ? purchases / sessions : null };
+  });
+
+  return {
+    kpis,
+    data: { steps: labelled, dropoff: journey.stepDropoff(steps), byPlatform, instrumentationGaps },
+    window: w,
+    warnings: funnel.warnings,
+    state: funnel.state,
+    sources: [funnel.source],
+  };
+}
+
+/* ── /stores ─────────────────────────────────────────────────────────────── */
+
+export interface StoresData {
+  rows: StoreRollup[];
+  states: ReturnType<typeof rollupStates>;
+  darkWorklist: StoreRollup[];
+  ops: Map<string, { qrVmPlaced: boolean | null; staffTrained: boolean | null; footfallDaily: number | null; nocOwner: string | null }>;
+  cohort: Array<{ weeksSinceActivation: number; ordersPerStore: number }>;
+}
+
+export async function storesModule(w: DateWindow = trailingWindow(28)): Promise<ModuleResult<StoresData>> {
+  const [stores, orders, scans, ops] = await Promise.all([
+    getStores(),
+    getOrders(w),
+    getScans(w),
+    getStoreOps(),
+  ]);
+  const t = await getThresholds();
+  const today = todayIST();
+
+  const dailyByStore = new Map<string, { dateKey: string; storeId: string; orders: number; revenue: number; scans: number; sessions: number }>();
+  for (const o of orders.rows) {
+    const key = `${o.orderDate}|${o.storeId}`;
+    const cur = dailyByStore.get(key) ?? {
+      dateKey: o.orderDate, storeId: o.storeId, orders: 0, revenue: 0, scans: 0, sessions: 0,
+    };
+    cur.orders++;
+    cur.revenue += o.netValue;
+    dailyByStore.set(key, cur);
+  }
+
+  const covByStore = coverageByStore(scans.rows);
+  const rows = rollupStores(stores.rows, [...dailyByStore.values()], today, covByStore);
+  const totalByState = new Map<string, number>();
+  for (const s of stores.rows) totalByState.set(s.state, (totalByState.get(s.state) ?? 0) + 1);
+  const states = rollupStates(rows, totalByState);
+
+  const live = rows.length;
+  const active = rows.filter((r) => r.orders7d > 0).length;
+  const dark = rows.filter((r) => r.isDark).length;
+  const orderedToday = rows.filter((r) => r.ordersToday > 0).length;
+  const meta = { state: worstState(stores.state, orders.state), fetchedAt: orders.fetchedAt };
+
+  const kpis: MetricValue[] = [
+    metricValue('stores_live', live, { ...meta, sourceOverride: stores.source }),
+    metricValue('stores_active', active, { ...meta }),
+    metricValue('store_activation_pct', live / t.total_trends_stores, {
+      ...meta,
+      sourceOverride: `${stores.source} ÷ ${t.total_trends_stores} Trends stores`,
+    }),
+    metricValue('daily_order_compliance', active === 0 ? null : orderedToday / active, { ...meta }),
+    metricValue('stores_dark', dark, { ...meta }),
+    metricValue(
+      'orders_per_active_store',
+      active === 0 ? null : rows.reduce((a, r) => a + r.orders7d, 0) / active / 7,
+      { ...meta },
+    ),
+  ];
+
+  const darkWorklist = rows
+    .filter((r) => r.isDark)
+    .sort((a, b) => (b.daysSinceLastOrder ?? 999) - (a.daysSinceLastOrder ?? 999));
+
+  // Activation cohort — does adoption stick?
+  const cohortMap = new Map<number, { orders: number; stores: number }>();
+  for (const r of rows) {
+    if (!r.activatedOn) continue;
+    const weeks = Math.floor(
+      (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${r.activatedOn}T00:00:00Z`)) / (7 * 86_400_000),
+    );
+    if (weeks < 0 || weeks > 26) continue;
+    const cur = cohortMap.get(weeks) ?? { orders: 0, stores: 0 };
+    cur.orders += r.orders28d;
+    cur.stores++;
+    cohortMap.set(weeks, cur);
+  }
+  const cohort = [...cohortMap.entries()]
+    .map(([weeksSinceActivation, v]) => ({
+      weeksSinceActivation,
+      ordersPerStore: v.stores ? v.orders / v.stores : 0,
+    }))
+    .sort((a, b) => a.weeksSinceActivation - b.weeksSinceActivation);
+
+  return {
+    kpis,
+    data: {
+      rows,
+      states,
+      darkWorklist,
+      ops: new Map(ops.rows.map((o) => [o.storeId, o])),
+      cohort,
+    },
+    window: w,
+    warnings: [...stores.warnings, ...orders.warnings],
+    state: meta.state,
+    sources: [stores.source, orders.source, scans.source],
+  };
+}
+
+/* ── /catalogue ──────────────────────────────────────────────────────────── */
+
+export interface CatalogueData {
+  daily: Awaited<ReturnType<typeof getCatalogueDaily>>['rows'];
+  gaps: Awaited<ReturnType<typeof getGaps>>['rows'];
+  ageBuckets: ReturnType<typeof gapAgeBuckets>;
+  reasons: Array<{ reason: string; direction: string | null; count: number }>;
+  storeCoverage: Array<{ storeId: string; coverage: number | null; scans: number; failed: number }>;
+  auditedCoverage: number | null;
+  reportGeneratedToday: boolean | null;
+}
+
+export async function catalogueModule(
+  w: DateWindow = { start: '2026-07-30', end: '2026-08-12' },
+): Promise<ModuleResult<CatalogueData>> {
+  const [daily, gaps, scans, stores] = await Promise.all([
+    getCatalogueDaily(w),
+    getGaps(w),
+    getScans(w),
+    getStores(),
+  ]);
+  const today = todayIST();
+
+  // Window-level coverage is computed from EAN-level rows, not by summing daily
+  // distinct counts — that would double-count any EAN scanned on more than one
+  // day and quietly inflate the denominator.
+  const cov = aggregateCoverage(scans.rows);
+  const prevScans = await getScans(previousPeriod(w));
+  const prevCov = aggregateCoverage(prevScans.rows);
+  const meta = { state: scans.state, fetchedAt: scans.fetchedAt };
+
+  const openGaps = gaps.rows.filter((g) => g.status !== 'resolved' && g.status !== 'wontfix');
+  // Keyed off the window's last day, not literally yesterday: for any window
+  // that doesn't end today, "new today" against today's date is always zero and
+  // reads as good news when it is really no news.
+  const latestDay = w.end;
+  const newToday = gaps.rows.filter((g) => g.firstSeen === latestDay).length;
+  const resolved7d = gaps.rows.filter(
+    (g) => g.status === 'resolved' && g.lastSeen >= addDays(latestDay, -7),
+  ).length;
+
+  const ages = openGaps.map(
+    (g) => (Date.parse(`${latestDay}T00:00:00Z`) - Date.parse(`${g.firstSeen}T00:00:00Z`)) / 86_400_000,
+  );
+  const medianAge = ages.length
+    ? [...ages].sort((a, b) => a - b)[Math.floor(ages.length / 2)]
+    : null;
+
+  // §16.5.2 — three different measurements that will disagree. Never blend them.
+  const { STORE_VISIT_AUDITS } = await import('@/fixtures/baselines');
+  const auditScanned = STORE_VISIT_AUDITS.reduce((a, v) => a + v.itemsScanned, 0);
+  const auditFailed = STORE_VISIT_AUDITS.reduce((a, v) => a + v.itemsFailed, 0);
+  const auditedCoverage = auditScanned ? (auditScanned - auditFailed) / auditScanned : null;
+
+  const kpis: MetricValue[] = [
+    metricValue('unique_coverage', cov.uniqueCoverage, {
+      ...meta,
+      deltaPp: ppDelta(cov.uniqueCoverage, prevCov.uniqueCoverage),
+      sourceOverride: daily.source,
+    }),
+    metricValue('total_coverage', cov.totalCoverage, {
+      ...meta,
+      deltaPp: ppDelta(cov.totalCoverage, prevCov.totalCoverage),
+    }),
+    metricValue('audited_coverage', auditedCoverage, {
+      state: 'fixture',
+      fetchedAt: new Date().toISOString(),
+      sourceOverride: 'fact_store_visit_audit — 4 store visits, Jul 2026',
+    }),
+    metricValue('missing_distinct', cov.uniqueFailed, { ...meta }),
+    metricValue('missing_new', newToday, { ...meta }),
+    metricValue('missing_resolved', resolved7d, { ...meta }),
+    metricValue('missing_age_p50', medianAge, { ...meta }),
+  ];
+
+  const reasonCounts = new Map<string, { direction: string | null; count: number }>();
+  for (const g of openGaps) {
+    const cur = reasonCounts.get(g.suspectedReason) ?? { direction: g.reasonDirection, count: 0 };
+    cur.count++;
+    reasonCounts.set(g.suspectedReason, cur);
+  }
+
+  const byStore = coverageByStore(scans.rows);
+  const storeById = new Map(stores.rows.map((s) => [s.storeId, s]));
+  const storeCoverage = [...byStore.entries()]
+    .map(([storeId, v]) => ({
+      storeId,
+      storeName: storeById.get(storeId)?.storeName ?? storeId,
+      coverage: v.scans ? (v.scans - v.failed) / v.scans : null,
+      scans: v.scans,
+      failed: v.failed,
+    }))
+    .sort((a, b) => (a.coverage ?? 1) - (b.coverage ?? 1));
+
+  const todayRow = daily.rows.find((d) => d.dateKey === addDays(today, -1));
+
+  return {
+    kpis,
+    data: {
+      daily: daily.rows,
+      gaps: gaps.rows,
+      ageBuckets: gapAgeBuckets(gaps.rows, today),
+      reasons: [...reasonCounts.entries()]
+        .map(([reason, v]) => ({ reason, direction: v.direction, count: v.count }))
+        .sort((a, b) => b.count - a.count),
+      storeCoverage,
+      auditedCoverage,
+      reportGeneratedToday: todayRow?.reportGenerated ?? null,
+    },
+    window: w,
+    warnings: [...daily.warnings, ...scans.warnings],
+    state: worstState(daily.state, scans.state),
+    sources: [daily.source, scans.source],
+  };
+}
+
+/* ── /app-health ─────────────────────────────────────────────────────────── */
+
+export interface AppHealthData {
+  daily: Awaited<ReturnType<typeof getAppHealth>>['rows'];
+  latency: Awaited<ReturnType<typeof getLatency>>['rows'];
+  score: ReturnType<typeof appHealthScore>;
+  releases: Array<{ dateKey: string; label: string }>;
+}
+
+export async function appHealthModule(w: DateWindow = trailingWindow(28)): Promise<ModuleResult<AppHealthData>> {
+  const [health, latency, issues] = await Promise.all([getAppHealth(w), getLatency(w), getIssues()]);
+  const t = await getThresholds();
+
+  const latest = health.rows.at(-1) ?? null;
+  const prev = health.rows.at(-2) ?? null;
+  const latestLatency = latency.rows.filter((l) => l.dateKey === (latest?.dateKey ?? ''));
+  const p0Open = issueMetrics.p0Open(issues.rows);
+
+  const score = appHealthScore(
+    {
+      crashFreeRate: latest?.crashFreeRate ?? null,
+      paymentSuccessRate: latest?.paymentSuccessRate ?? null,
+      apiErrorRate: latest?.apiErrorRate ?? null,
+      latency: latestLatency.map((l) => ({
+        endpoint: l.endpoint,
+        sloP95Ms: l.sloP95Ms,
+        actualP95Ms: l.p95Ms,
+      })),
+      p0Open,
+    },
+    t,
+  );
+
+  const meta = { state: health.state, fetchedAt: health.fetchedAt };
+  const worstP95 = latestLatency.reduce<number | null>(
+    (a, l) => (a == null || l.p95Ms > a ? l.p95Ms : a),
+    null,
+  );
+
+  const kpis: MetricValue[] = [
+    metricValue('app_health_score', score.score, { ...meta, sourceOverride: 'derived (§5.8)' }),
+    metricValue('crash_free_rate', latest?.crashFreeRate ?? null, {
+      ...meta,
+      deltaPp: ppDelta(latest?.crashFreeRate ?? null, prev?.crashFreeRate ?? null),
+    }),
+    metricValue('api_error_rate', latest?.apiErrorRate ?? null, {
+      ...meta,
+      deltaPp: ppDelta(latest?.apiErrorRate ?? null, prev?.apiErrorRate ?? null),
+    }),
+    metricValue('payment_failure_rate', latest ? 1 - latest.paymentSuccessRate : null, { ...meta }),
+    metricValue('p95_latency', worstP95, { ...meta, sourceOverride: latency.source }),
+    metricValue('error_log_volume', latest?.gcpErrorLogCount ?? null, { ...meta }),
+    metricValue('p0_open', p0Open, { state: issues.state, fetchedAt: issues.fetchedAt, sourceOverride: issues.source }),
+  ];
+
+  return {
+    kpis,
+    data: {
+      daily: health.rows,
+      latency: latency.rows,
+      score,
+      // §21.3 — deploy markers. Correlating an error spike with a deploy is 80%
+      // of incident triage.
+      releases: [{ dateKey: '2026-08-05', label: 'AJIO 9.44' }],
+    },
+    window: w,
+    warnings: [...health.warnings, ...latency.warnings],
+    state: worstState(health.state, latency.state),
+    sources: [health.source, latency.source, issues.source],
+  };
+}
+
+/* ── /issues ─────────────────────────────────────────────────────────────── */
+
+export async function issuesModule(): Promise<ModuleResult<{ rows: Awaited<ReturnType<typeof getIssues>>['rows']; byWorkstream: Array<{ workstream: string; open: number; p0: number }>; byJourneyStep: Array<{ step: string; count: number }> }>> {
+  const issues = await getIssues();
+  const meta = { state: issues.state, fetchedAt: issues.fetchedAt, sourceOverride: issues.source };
+
+  const kpis: MetricValue[] = [
+    metricValue('p0_open', issueMetrics.p0Open(issues.rows), meta),
+    metricValue('p0_age_p50', issueMetrics.p0AgeP50(issues.rows), meta),
+    metricValue('issues_unowned', issueMetrics.unowned(issues.rows), meta),
+    metricValue('open_close_ratio', issueMetrics.openCloseRatio(issues.rows), meta),
+  ];
+
+  const open = issues.rows.filter((i) => i.status !== 'Done');
+  const wsMap = new Map<string, { open: number; p0: number }>();
+  for (const i of open) {
+    const cur = wsMap.get(i.workstream) ?? { open: 0, p0: 0 };
+    cur.open++;
+    if (i.priority === 'P0') cur.p0++;
+    wsMap.set(i.workstream, cur);
+  }
+  const stepMap = new Map<string, number>();
+  for (const i of open) {
+    if (!i.journeyStep) continue;
+    stepMap.set(i.journeyStep, (stepMap.get(i.journeyStep) ?? 0) + 1);
+  }
+
+  return {
+    kpis,
+    data: {
+      rows: issues.rows,
+      byWorkstream: [...wsMap.entries()]
+        .map(([workstream, v]) => ({ workstream, ...v }))
+        .sort((a, b) => b.open - a.open),
+      byJourneyStep: [...stepMap.entries()]
+        .map(([step, count]) => ({ step, count }))
+        .sort((a, b) => b.count - a.count),
+    },
+    window: trailingWindow(28),
+    warnings: issues.warnings,
+    state: issues.state,
+    sources: [issues.source],
+  };
+}
+
+export { worstState };
