@@ -4,15 +4,22 @@ import { journeyModule } from '@/lib/services/modules';
 import { KpiStrip } from '@/components/kpi/KpiCard';
 import { DropoffRanking, FunnelChart } from '@/components/charts/FunnelChart';
 import { Column, DataTable, ModuleHeader } from '@/components/table/DataTable';
+import { FilterBar } from '@/components/filters/FilterBar';
+import { getFilterOptions } from '@/lib/services/filter-options';
 import { formatCount, formatPct } from '@/lib/format/currency';
-import { trailingWindow } from '@/lib/format/dates';
+import { parseFilters, type RawParams } from '@/lib/params/filters';
 import { getScanStrip } from '@/lib/data/repository';
 import { ScanStrip } from '@/components/charts/ScanStrip';
 
 export const dynamic = 'force-dynamic';
 
-export default async function JourneyPage() {
-  const [mod, strip] = await Promise.all([journeyModule(trailingWindow(28)), getScanStrip()]);
+export default async function JourneyPage({ searchParams }: { searchParams: Promise<RawParams> }) {
+  const filters = parseFilters(await searchParams, 28);
+  const [mod, strip, options] = await Promise.all([
+    journeyModule(filters),
+    getScanStrip(),
+    getFilterOptions(),
+  ]);
   const { steps, dropoff, byPlatform, instrumentationGaps } = mod.data;
 
   const platformCols: Column<(typeof byPlatform)[number]>[] = [
@@ -28,13 +35,25 @@ export default async function JourneyPage() {
         title="Journey"
         question="Where does the journey from open → scan → bag → pay → de-tag break down?"
         window={mod.window}
+        scope={mod.scope}
+        compareLabel={mod.compareLabel}
         sources={mod.sources}
-        warnings={mod.warnings}
+        warnings={[...mod.warnings, ...filters.warnings]}
+      />
+
+      {/* §16.7 — platform is a first-class filter here: iOS and Android drop
+          out at different steps, and the blended funnel hides that. */}
+      <FilterBar
+        window={mod.window}
+        stores={options.stores}
+        cities={options.cities}
+        states={options.states}
+        showPlatform
       />
 
       <ScanStrip data={strip.rows} state={strip.state} liveness={strip.state === 'fixture' ? 'fixture' : 'intraday'} compact />
 
-      <KpiStrip metrics={mod.kpis} compareLabel="vs previous period" />
+      <KpiStrip metrics={mod.kpis} compareLabel={mod.compareLabel} />
 
       {instrumentationGaps.length > 0 && (
         <section className="rounded border border-[var(--color-warn)]/40 bg-[var(--color-warn)]/5 p-4">

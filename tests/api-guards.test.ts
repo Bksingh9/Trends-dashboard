@@ -134,13 +134,13 @@ describe('query-param validation — a bad URL must never 500', () => {
   it('falls back to the default window on an unparseable date', async () => {
     const p = await parse('start=not-a-date&end=also-bad');
     expect(p.window.start).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(p.warnings.join(' ')).toMatch(/Ignored invalid date range/);
+    expect(p.warnings.join(' ')).toMatch(/Ignored an invalid date range/);
   });
 
   it('rejects a well-formed but non-existent date', async () => {
     // 2026-02-31 passes a regex but is not a real day.
     const p = await parse('start=2026-02-31&end=2026-03-01');
-    expect(p.warnings.join(' ')).toMatch(/Ignored invalid date range/);
+    expect(p.warnings.join(' ')).toMatch(/Ignored an invalid date range/);
   });
 
   it('swaps a reversed range rather than returning an empty window', async () => {
@@ -151,7 +151,7 @@ describe('query-param validation — a bad URL must never 500', () => {
 
   it('ignores a half-specified range', async () => {
     const p = await parse('end=2026-08-12');
-    expect(p.warnings.join(' ')).toMatch(/Ignored invalid date range/);
+    expect(p.warnings.join(' ')).toMatch(/Ignored an invalid date range/);
   });
 
   it('does not choke on markup or control characters in any param', async () => {

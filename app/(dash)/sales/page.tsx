@@ -3,13 +3,16 @@ import { salesModule } from '@/lib/services/modules';
 import { KpiStrip } from '@/components/kpi/KpiCard';
 import { TrendLine } from '@/components/charts/TrendLine';
 import { Column, DataTable, ModuleHeader } from '@/components/table/DataTable';
+import { FilterBar } from '@/components/filters/FilterBar';
+import { getFilterOptions } from '@/lib/services/filter-options';
 import { formatCount, formatINR } from '@/lib/format/currency';
-import { trailingWindow } from '@/lib/format/dates';
+import { parseFilters, type RawParams } from '@/lib/params/filters';
 
 export const dynamic = 'force-dynamic';
 
-export default async function SalesPage() {
-  const mod = await salesModule(trailingWindow(90));
+export default async function SalesPage({ searchParams }: { searchParams: Promise<RawParams> }) {
+  const filters = parseFilters(await searchParams, 90);
+  const [mod, options] = await Promise.all([salesModule(filters), getFilterOptions()]);
   const { daily, waterfall, valueHistogram, storeMatrix, stateMatrix, newVsRepeat } = mod.data;
 
   // Every breakdown on this page is confirmed-only, so the count they tie to is
@@ -54,14 +57,18 @@ export default async function SalesPage() {
         title="Sales"
         question="What is Companion selling, and is it growing?"
         window={mod.window}
+        scope={mod.scope}
+        compareLabel={mod.compareLabel}
         sources={mod.sources}
-        warnings={mod.warnings}
+        warnings={[...mod.warnings, ...filters.warnings]}
       />
 
-      <KpiStrip metrics={mod.kpis} compareLabel="vs previous period" />
+      <FilterBar window={mod.window} stores={options.stores} cities={options.cities} states={options.states} />
+
+      <KpiStrip metrics={mod.kpis} compareLabel={mod.compareLabel} />
 
       <TrendLine
-        title="Orders and e-GMV — 90 days"
+        title={`Orders and e-GMV — ${mod.window.start} → ${mod.window.end}`}
         subtitle="7-day rolling mean drawn behind each series"
         sourceNote={mod.sources[0]}
         series={[

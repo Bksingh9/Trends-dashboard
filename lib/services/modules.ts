@@ -41,13 +41,20 @@ import { getThresholds } from '@/lib/db/settings';
 import {
   addDays,
   dateRange,
-  previousPeriod,
   todayIST,
   trailingWindow,
   type DateWindow,
 } from '@/lib/format/dates';
 import { FUNNEL_STEPS } from '@/fixtures/business';
 import type { DataSourceState } from '@/lib/connectors/types';
+import {
+  COMPARE_LABELS,
+  DEFAULT_TENANT,
+  comparisonWindow,
+  samePeriodLastMonth,
+  type Filters,
+} from '@/lib/params/filters';
+import { resolveScope, scopePlatform, scopeRows, scopeStores } from '@/lib/services/scope';
 
 export interface ModuleResult<T> {
   kpis: MetricValue[];
@@ -56,6 +63,28 @@ export interface ModuleResult<T> {
   warnings: string[];
   state: DataSourceState;
   sources: string[];
+  /** What the §9.3 filters narrowed this to, for the page header. */
+  scope?: string | null;
+  /** The comparison every delta on this module is measured against. */
+  compareLabel?: string;
+}
+
+/**
+ * Modules accept either a bare window or the full §9.3 filter set.
+ *
+ * The bare-window form is what the tests and the default page loads use, and
+ * keeping it means "no filters" cannot drift away from "the default filters" —
+ * they are the same code path with the same defaults.
+ */
+export type ModuleInput = DateWindow | Filters;
+
+function asFilters(input: ModuleInput, defaultDays: number): Filters {
+  if ('compare' in input) return input;
+  return {
+    window: input.start && input.end ? input : trailingWindow(defaultDays),
+    tenant: DEFAULT_TENANT,
+    compare: 'prev_period',
+  };
 }
 
 function worstState(...states: DataSourceState[]): DataSourceState {
@@ -81,10 +110,26 @@ export interface SalesData {
   newVsRepeat: Array<{ dateKey: string; newCustomers: number; repeatCustomers: number }>;
 }
 
-export async function salesModule(w: DateWindow = trailingWindow(90)): Promise<ModuleResult<SalesData>> {
-  const [orders, stores] = await Promise.all([getOrders(w), getStores()]);
-  const prev = previousPeriod(w);
-  const prevOrders = await getOrders(prev);
+export async function salesModule(input: ModuleInput = trailingWindow(90)): Promise<ModuleResult<SalesData>> {
+  const f = asFilters(input, 90);
+  const w = f.window;
+  const [allOrders, stores] = await Promise.all([getOrders(w), getStores()]);
+
+  // Scope first, then aggregate. Filtering after the aggregate is how a store
+  // filter ends up narrowing the table while leaving the headline national.
+  const scope = resolveScope(f, stores.rows);
+  const orders = { ...allOrders, rows: scopeRows(allOrders.rows, scope) };
+
+  // The comparison window follows `compare`, so the delta on every card is
+  // measured against the period the reader chose — not always the previous one.
+  const prev = comparisonWindow(w, f.compare);
+  const prevRaw = await getOrders(prev);
+  const prevOrders = { ...prevRaw, rows: scopeRows(prevRaw.rows, scope) };
+
+  // Revenue MoM has its own fixed comparison — see the card below.
+  const momWindow = samePeriodLastMonth(w);
+  const momRaw = await getOrders(momWindow);
+  const momAgg = aggregateOrders(scopeRows(momRaw.rows, scope));
 
   const agg = aggregateOrders(orders.rows);
   const prevAgg = aggregateOrders(prevOrders.rows);
@@ -119,11 +164,14 @@ export async function salesModule(w: DateWindow = trailingWindow(90)): Promise<M
       ...meta,
       deltaPp: ppDelta(business.repeatRate(agg), business.repeatRate(prevAgg)),
     }),
-    // Like-for-like on days elapsed, so a month-to-date figure is not compared
-    // against a full previous month.
-    metricValue('revenue_mom', relativeDelta(business.netRevenue(agg), business.netRevenue(prevAgg)), {
+    // Month-on-month means month-on-month regardless of what `compare` is set
+    // to — otherwise the card silently changes meaning when a reader switches
+    // the comparison, while keeping the name "Revenue MoM". Day-aligned, so a
+    // month-to-date figure is never measured against a full previous month:
+    // §1's own Apr→May +115% is 1–N May against 1–N April.
+    metricValue('revenue_mom', relativeDelta(business.netRevenue(agg), business.netRevenue(momAgg)), {
       ...meta,
-      sourceOverride: 'derived — month-to-date vs same period last month',
+      sourceOverride: `derived — ${w.start}→${w.end} vs the same day-of-month range one month earlier (${momWindow.start}→${momWindow.end})`,
     }),
   ];
 
@@ -215,9 +263,11 @@ export async function salesModule(w: DateWindow = trailingWindow(90)): Promise<M
       newVsRepeat,
     },
     window: w,
-    warnings: orders.warnings,
+    warnings: [...orders.warnings, ...scope.warnings],
     state: orders.state,
     sources: [orders.source, stores.source],
+    scope: scope.description,
+    compareLabel: COMPARE_LABELS[f.compare],
   };
 }
 
@@ -230,9 +280,19 @@ export interface JourneyData {
   instrumentationGaps: Array<{ step: string; label: string; note: string }>;
 }
 
-export async function journeyModule(w: DateWindow = trailingWindow(28)): Promise<ModuleResult<JourneyData>> {
-  const funnel = await getFunnel(w);
-  const prevFunnel = await getFunnel(previousPeriod(w));
+export async function journeyModule(input: ModuleInput = trailingWindow(28)): Promise<ModuleResult<JourneyData>> {
+  const f = asFilters(input, 28);
+  const w = f.window;
+  const [rawFunnel, allStores] = await Promise.all([getFunnel(w), getStores()]);
+  const scope = resolveScope(f, allStores.rows);
+
+  // The funnel is the one place `platform` genuinely changes the answer: iOS
+  // and Android drop out at different steps, and §16.7 is explicit that
+  // blending them hides an SDK-version problem behind an average.
+  const funnel = { ...rawFunnel, rows: scopePlatform(scopeRows(rawFunnel.rows, scope), scope) };
+  const rawPrev = await getFunnel(comparisonWindow(w, f.compare));
+  const prevFunnel = { ...rawPrev, rows: scopePlatform(scopeRows(rawPrev.rows, scope), scope) };
+
   const steps = aggregateFunnel(funnel.rows);
   const prevSteps = aggregateFunnel(prevFunnel.rows);
   const meta = { state: funnel.state, fetchedAt: funnel.fetchedAt };
@@ -295,7 +355,10 @@ export async function journeyModule(w: DateWindow = trailingWindow(28)): Promise
           : 'Expected event has no volume in the GA4 export.',
     }));
 
-  const platforms = ['Android', 'iOS'];
+  // Derived from the scoped rows rather than hardcoded, so filtering to iOS
+  // shows one row instead of iOS beside a row of zeros labelled Android —
+  // which reads as "Android has collapsed", not "Android is filtered out".
+  const platforms = [...new Set(funnel.rows.map((r) => r.platform).filter(Boolean))].sort();
   const byPlatform = platforms.map((platform) => {
     const rows = funnel.rows.filter((r) => r.platform === platform);
     const agg = aggregateFunnel(rows);
@@ -308,9 +371,11 @@ export async function journeyModule(w: DateWindow = trailingWindow(28)): Promise
     kpis,
     data: { steps: labelled, dropoff: journey.stepDropoff(steps), byPlatform, instrumentationGaps },
     window: w,
-    warnings: funnel.warnings,
+    warnings: [...funnel.warnings, ...scope.warnings],
     state: funnel.state,
     sources: [funnel.source],
+    scope: scope.description,
+    compareLabel: COMPARE_LABELS[f.compare],
   };
 }
 
@@ -324,15 +389,23 @@ export interface StoresData {
   cohort: Array<{ weeksSinceActivation: number; ordersPerStore: number }>;
 }
 
-export async function storesModule(w: DateWindow = trailingWindow(28)): Promise<ModuleResult<StoresData>> {
-  const [stores, orders, scans, ops] = await Promise.all([
+export async function storesModule(input: ModuleInput = trailingWindow(28)): Promise<ModuleResult<StoresData>> {
+  const f = asFilters(input, 28);
+  const w = f.window;
+  const [allStores, allOrders, allScans, ops] = await Promise.all([
     getStores(),
     getOrders(w),
     getScans(w),
     getStoreOps(),
   ]);
   const t = await getThresholds();
-  const today = todayIST();
+
+  // Scoped before anything is counted, so `stores_live` and the store table
+  // describe the same set of stores rather than the filter narrowing only one.
+  const scope = resolveScope(f, allStores.rows);
+  const stores = { ...allStores, rows: scopeStores(allStores.rows, scope) };
+  const orders = { ...allOrders, rows: scopeRows(allOrders.rows, scope) };
+  const scans = { ...allScans, rows: scopeRows(allScans.rows, scope) };
 
   const dailyByStore = new Map<string, { dateKey: string; storeId: string; orders: number; revenue: number; scans: number; sessions: number }>();
   for (const o of orders.rows) {
@@ -402,8 +475,10 @@ export async function storesModule(w: DateWindow = trailingWindow(28)): Promise<
   const cohortMap = new Map<number, { orders: number; stores: number }>();
   for (const r of rows) {
     if (!r.activatedOn) continue;
+    // As of the window's last day, matching the rollup above — a cohort chart
+    // measured from a date the window does not contain drifts a bucket per day.
     const weeks = Math.floor(
-      (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${r.activatedOn}T00:00:00Z`)) / (7 * 86_400_000),
+      (Date.parse(`${w.end}T00:00:00Z`) - Date.parse(`${r.activatedOn}T00:00:00Z`)) / (7 * 86_400_000),
     );
     if (weeks < 0 || weeks > 26) continue;
     const cur = cohortMap.get(weeks) ?? { orders: 0, stores: 0 };
@@ -428,9 +503,11 @@ export async function storesModule(w: DateWindow = trailingWindow(28)): Promise<
       cohort,
     },
     window: w,
-    warnings: [...stores.warnings, ...orders.warnings],
+    warnings: [...stores.warnings, ...orders.warnings, ...scope.warnings],
     state: meta.state,
     sources: [stores.source, orders.source, scans.source],
+    scope: scope.description,
+    compareLabel: COMPARE_LABELS[f.compare],
   };
 }
 
@@ -449,9 +526,11 @@ export interface CatalogueData {
 }
 
 export async function catalogueModule(
-  w: DateWindow = { start: '2026-07-30', end: '2026-08-12' },
+  input: ModuleInput = { start: '2026-07-30', end: '2026-08-12' },
 ): Promise<ModuleResult<CatalogueData>> {
-  const [daily, gaps, scans, stores] = await Promise.all([
+  const f = asFilters(input, 14);
+  const w = f.window;
+  const [daily, allGaps, allScans, allStores] = await Promise.all([
     getCatalogueDaily(w),
     getGaps(w),
     getScans(w),
@@ -459,11 +538,21 @@ export async function catalogueModule(
   ]);
   const today = todayIST();
 
+  const scope = resolveScope(f, allStores.rows);
+  const stores = { ...allStores, rows: scopeStores(allStores.rows, scope) };
+  const scans = { ...allScans, rows: scopePlatform(scopeRows(allScans.rows, scope), scope) };
+  // The gap register is EAN-grained, not store-grained: a gap row aggregates
+  // every store that hit it. Narrowing it by store would need the per-store
+  // scan rows, which is what `storeCoverage` below is for — so the register
+  // stays national and the header says so rather than silently half-filtering.
+  const gaps = allGaps;
+
   // Window-level coverage is computed from EAN-level rows, not by summing daily
   // distinct counts — that would double-count any EAN scanned on more than one
   // day and quietly inflate the denominator.
   const cov = aggregateCoverage(scans.rows);
-  const prevScans = await getScans(previousPeriod(w));
+  const prevRawScans = await getScans(comparisonWindow(w, f.compare));
+  const prevScans = { ...prevRawScans, rows: scopePlatform(scopeRows(prevRawScans.rows, scope), scope) };
   const prevCov = aggregateCoverage(prevScans.rows);
   const meta = { state: scans.state, fetchedAt: scans.fetchedAt };
 
@@ -599,6 +688,10 @@ export async function catalogueModule(
     warnings: [
       ...daily.warnings,
       ...scans.warnings,
+      ...scope.warnings,
+      ...(scope.storeIds
+        ? ['The missing-EAN register is EAN-grained and stays national; the store × coverage table below is the store-scoped view.']
+        : []),
       // Only surfaced when the split is a real hole, not when it is the
       // expected open/closed partition.
       ...(gapReconciliation.reconciled
@@ -609,6 +702,8 @@ export async function catalogueModule(
     ],
     state: worstState(daily.state, scans.state),
     sources: [daily.source, scans.source],
+    scope: scope.description,
+    compareLabel: COMPARE_LABELS[f.compare],
   };
 }
 
@@ -621,9 +716,27 @@ export interface AppHealthData {
   releases: Array<{ dateKey: string; label: string }>;
 }
 
-export async function appHealthModule(w: DateWindow = trailingWindow(28)): Promise<ModuleResult<AppHealthData>> {
+export async function appHealthModule(input: ModuleInput = trailingWindow(28)): Promise<ModuleResult<AppHealthData>> {
+  const f = asFilters(input, 28);
+  const w = f.window;
   const [health, latency, issues] = await Promise.all([getAppHealth(w), getLatency(w), getIssues()]);
   const t = await getThresholds();
+
+  // `fact_app_health_daily` is a national daily aggregate — it carries neither
+  // a store nor a platform column. A store filter therefore cannot be honoured
+  // here, and silently returning national numbers under a store-scoped header
+  // is worse than saying so (§14.5).
+  const unhonoured = [
+    f.store && `store=${f.store}`,
+    f.city && `city=${f.city}`,
+    f.state && `state=${f.state}`,
+    f.platform && `platform=${f.platform}`,
+  ].filter(Boolean) as string[];
+  const scopeWarnings = unhonoured.length
+    ? [
+        `App health is a national daily aggregate with no store or platform dimension — ${unhonoured.join(', ')} could not be applied, and these numbers cover every store.`,
+      ]
+    : [];
 
   const latest = health.rows.at(-1) ?? null;
   const prev = health.rows.at(-2) ?? null;
@@ -698,9 +811,10 @@ export async function appHealthModule(w: DateWindow = trailingWindow(28)): Promi
       releases: [{ dateKey: '2026-08-05', label: 'AJIO 9.44' }],
     },
     window: w,
-    warnings: [...health.warnings, ...latency.warnings],
+    warnings: [...health.warnings, ...latency.warnings, ...scopeWarnings],
     state: worstState(health.state, latency.state),
     sources: [health.source, latency.source, issues.source],
+    compareLabel: COMPARE_LABELS[f.compare],
   };
 }
 

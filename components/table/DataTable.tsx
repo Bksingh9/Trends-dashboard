@@ -180,6 +180,8 @@ export function ModuleHeader({
   window,
   sources,
   warnings = [],
+  scope,
+  compareLabel,
   children,
 }: {
   title: string;
@@ -187,6 +189,9 @@ export function ModuleHeader({
   window?: { start: string; end: string };
   sources: string[];
   warnings?: string[];
+  /** What the §9.3 filters narrowed this page to, if anything. */
+  scope?: string | null;
+  compareLabel?: string;
   children?: React.ReactNode;
 }) {
   return (
@@ -195,6 +200,13 @@ export function ModuleHeader({
         <div>
           <h1 className="display text-xl">{title}</h1>
           <p className="mt-0.5 text-xs text-[var(--text-muted)]">{question}</p>
+          {/* A filtered page that looks unfiltered is the fastest way to have
+              someone quote a store's revenue as the national figure. */}
+          {scope && (
+            <p data-scope className="mt-1 text-2xs text-[var(--color-ion)]">
+              Filtered to {scope}
+            </p>
+          )}
         </div>
         {/* max-w-md (448px) exceeds a 412px phone viewport, so it is capped to
             the container below sm and only widens once there is room. */}
@@ -204,6 +216,7 @@ export function ModuleHeader({
               {window.start} → {window.end} IST
             </div>
           )}
+          {compareLabel && <div data-compare-label>{compareLabel}</div>}
           <div className="max-w-full truncate sm:max-w-md" title={sources.join(' · ')}>
             {sources.join(' · ')}
           </div>

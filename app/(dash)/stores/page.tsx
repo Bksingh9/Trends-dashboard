@@ -8,16 +8,19 @@
 import { storesModule } from '@/lib/services/modules';
 import { KpiStrip } from '@/components/kpi/KpiCard';
 import { Column, DataTable, ModuleHeader } from '@/components/table/DataTable';
+import { FilterBar } from '@/components/filters/FilterBar';
+import { getFilterOptions } from '@/lib/services/filter-options';
 import { formatCount, formatINR, formatPct } from '@/lib/format/currency';
-import { trailingWindow } from '@/lib/format/dates';
+import { parseFilters, type RawParams } from '@/lib/params/filters';
 import { entryUrl } from '@/lib/services/deeplink';
 import { CopyButton } from '@/components/shell/CopyButton';
 import type { StoreRollup } from '@/lib/metrics/compute';
 
 export const dynamic = 'force-dynamic';
 
-export default async function StoresPage() {
-  const mod = await storesModule(trailingWindow(28));
+export default async function StoresPage({ searchParams }: { searchParams: Promise<RawParams> }) {
+  const filters = parseFilters(await searchParams, 28);
+  const [mod, options] = await Promise.all([storesModule(filters), getFilterOptions()]);
   const { rows, states, darkWorklist, ops, cohort } = mod.data;
 
   const tri = (v: boolean | null | undefined) =>
@@ -149,9 +152,13 @@ export default async function StoresPage() {
         title="Stores"
         question="Which stores are using Companion, and which have gone dark?"
         window={mod.window}
+        scope={mod.scope}
+        compareLabel={mod.compareLabel}
         sources={mod.sources}
-        warnings={mod.warnings}
+        warnings={[...mod.warnings, ...filters.warnings]}
       />
+
+      <FilterBar window={mod.window} stores={options.stores} cities={options.cities} states={options.states} />
 
       <KpiStrip metrics={mod.kpis} />
 

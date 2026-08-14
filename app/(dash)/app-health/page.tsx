@@ -3,16 +3,18 @@ import { appHealthModule } from '@/lib/services/modules';
 import { KpiStrip } from '@/components/kpi/KpiCard';
 import { TrendLine } from '@/components/charts/TrendLine';
 import { Column, DataTable, ModuleHeader } from '@/components/table/DataTable';
+import { FilterBar } from '@/components/filters/FilterBar';
 import { formatCount, formatMs, formatPct } from '@/lib/format/currency';
-import { trailingWindow } from '@/lib/format/dates';
+import { parseFilters, type RawParams } from '@/lib/params/filters';
 import { CRITICAL_ENDPOINTS } from '@/lib/db/settings';
 import { isBreaching, isOverPlaceholder } from '@/lib/connectors/api-latency';
 import { cn } from '@/lib/cn';
 
 export const dynamic = 'force-dynamic';
 
-export default async function AppHealthPage() {
-  const mod = await appHealthModule(trailingWindow(28));
+export default async function AppHealthPage({ searchParams }: { searchParams: Promise<RawParams> }) {
+  const filters = parseFilters(await searchParams, 28);
+  const mod = await appHealthModule(filters);
   const { daily, latency, score, releases } = mod.data;
 
   const latestDate = daily.at(-1)?.dateKey ?? '';
@@ -72,9 +74,15 @@ export default async function AppHealthPage() {
         title="App Health"
         question="Is the software serving the journey healthy — crashes, latency, payments, releases?"
         window={mod.window}
+        compareLabel={mod.compareLabel}
         sources={mod.sources}
-        warnings={mod.warnings}
+        warnings={[...mod.warnings, ...filters.warnings]}
       />
+
+      {/* No store or platform selector: `fact_app_health_daily` is a national
+          daily aggregate with neither column, and offering a control that
+          silently does nothing is worse than not offering it. */}
+      <FilterBar window={mod.window} />
 
       <KpiStrip metrics={mod.kpis} />
 

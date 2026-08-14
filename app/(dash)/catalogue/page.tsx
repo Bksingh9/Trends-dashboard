@@ -4,7 +4,10 @@ import { KpiStrip } from '@/components/kpi/KpiCard';
 import { ManhattanChart } from '@/components/charts/ManhattanChart';
 import { TrendLine } from '@/components/charts/TrendLine';
 import { Column, DataTable, ModuleHeader } from '@/components/table/DataTable';
+import { FilterBar } from '@/components/filters/FilterBar';
+import { getFilterOptions } from '@/lib/services/filter-options';
 import { formatCount, formatPct } from '@/lib/format/currency';
+import { parseFilters, type RawParams } from '@/lib/params/filters';
 import { getThresholds } from '@/lib/db/settings';
 import { getScanStrip } from '@/lib/data/repository';
 import { ScanStrip } from '@/components/charts/ScanStrip';
@@ -12,8 +15,17 @@ import { STORE_VISIT_AUDITS } from '@/fixtures/baselines';
 
 export const dynamic = 'force-dynamic';
 
-export default async function CataloguePage() {
-  const [mod, t, strip] = await Promise.all([catalogueModule(), getThresholds(), getScanStrip()]);
+export default async function CataloguePage({ searchParams }: { searchParams: Promise<RawParams> }) {
+  const raw = await searchParams;
+  // §18.7's backfill window is the default here: it is the range the catalogue
+  // baseline is stated for, so an unfiltered load reproduces a known number.
+  const filters = raw.start || raw.end ? parseFilters(raw, 14) : { ...parseFilters(raw, 14), window: { start: '2026-07-30', end: '2026-08-12' } };
+  const [mod, t, strip, options] = await Promise.all([
+    catalogueModule(filters),
+    getThresholds(),
+    getScanStrip(),
+    getFilterOptions(),
+  ]);
   const {
     daily,
     gaps,
@@ -74,8 +86,18 @@ export default async function CataloguePage() {
         title="Catalogue"
         question="Of what customers tried to scan, how much worked — and why did the rest fail?"
         window={mod.window}
+        scope={mod.scope}
+        compareLabel={mod.compareLabel}
         sources={mod.sources}
-        warnings={mod.warnings}
+        warnings={[...mod.warnings, ...filters.warnings]}
+      />
+
+      <FilterBar
+        window={mod.window}
+        stores={options.stores}
+        cities={options.cities}
+        states={options.states}
+        showPlatform
       />
 
       <ScanStrip data={strip.rows} state={strip.state} liveness={strip.state === 'fixture' ? 'fixture' : 'intraday'} compact />
@@ -91,7 +113,7 @@ export default async function CataloguePage() {
         </div>
       )}
 
-      <KpiStrip metrics={mod.kpis} compareLabel="vs previous period" />
+      <KpiStrip metrics={mod.kpis} compareLabel={mod.compareLabel} />
 
       {/* §6.3 — the missing-EAN card counts every EAN observed failing; the
           reason breakdown, the aging histogram and the register below count

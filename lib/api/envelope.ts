@@ -8,7 +8,7 @@
 import { NextResponse } from 'next/server';
 import type { MetricValue } from '@/lib/metrics/compute';
 import type { DateWindow } from '@/lib/format/dates';
-import { trailingWindow } from '@/lib/format/dates';
+import { isValidDateKey, parseFiltersFromUrl, type ParsedFilters } from '@/lib/params/filters';
 
 export interface MetricMeta {
   source: string;
@@ -49,58 +49,19 @@ export function json<T>(body: Envelope<T>, init?: ResponseInit) {
   return NextResponse.json(body, init);
 }
 
-/** §9.3 — the standard query params, shared across every route. */
-export interface StandardParams {
-  window: DateWindow;
-  /** Surfaced in the envelope so a silently-corrected range is still visible. */
-  warnings: string[];
-  store?: string;
-  city?: string;
-  state?: string;
-  tenant: string;
-  platform?: string;
-  compare: 'prev_period' | 'same_period_last_month' | 'same_weekday_last_week';
-}
+/**
+ * §9.3 — the standard query params.
+ *
+ * The parser lives in `lib/params/filters` because the pages need it too, and
+ * an API that validates `compare` while a page does not is how a shared link
+ * stops showing what the sender was looking at.
+ */
+export type StandardParams = ParsedFilters;
 
-/** YYYY-MM-DD, and a date that actually exists — `2026-02-31` is not one. */
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-export function isValidDateKey(v: string | null): v is string {
-  if (!v || !DATE_RE.test(v)) return false;
-  const d = new Date(`${v}T00:00:00Z`);
-  return Number.isFinite(d.getTime()) && d.toISOString().slice(0, 10) === v;
-}
+export { isValidDateKey };
 
 export function parseParams(url: URL, defaultDays = 28): StandardParams {
-  const rawStart = url.searchParams.get('start');
-  const rawEnd = url.searchParams.get('end');
-  const warnings: string[] = [];
-
-  // Never 500 on a query string. A malformed date falls back to the default
-  // window with a warning in the envelope, because a dashboard that crashes on
-  // a bad bookmark is worse than one that says "I used the default window".
-  let window = trailingWindow(defaultDays);
-  if (rawStart || rawEnd) {
-    if (isValidDateKey(rawStart) && isValidDateKey(rawEnd)) {
-      window = rawStart <= rawEnd ? { start: rawStart, end: rawEnd } : { start: rawEnd, end: rawStart };
-      if (rawStart > rawEnd) warnings.push('start was after end — the range was swapped');
-    } else {
-      warnings.push(
-        `Ignored invalid date range (start=${rawStart ?? '—'}, end=${rawEnd ?? '—'}); using the trailing ${defaultDays} days`,
-      );
-    }
-  }
-
-  return {
-    window,
-    warnings,
-    store: url.searchParams.get('store') ?? undefined,
-    city: url.searchParams.get('city') ?? undefined,
-    state: url.searchParams.get('state') ?? undefined,
-    tenant: url.searchParams.get('tenant') ?? 'trends',
-    platform: url.searchParams.get('platform') ?? undefined,
-    compare: (url.searchParams.get('compare') as StandardParams['compare']) ?? 'prev_period',
-  };
+  return parseFiltersFromUrl(url, defaultDays);
 }
 
 /** A route never throws to the client — it reports the failure as data. */
