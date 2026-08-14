@@ -42,7 +42,7 @@ export const WINDOW_DAYS: Record<string, number> = {
   // a narrow window would drop any gap that happened not to be scanned in the
   // last three days — which is exactly the 30-day-old miss it exists to surface.
   'catalogue-gap-register': 30,
-  'slack-catalogue-report': 3,
+  'slack-catalogue-report': 3, // hourly report; 3 days of re-cover for late edits
   'sheets-store-master': 1,
   'bq-catalogue-master': 1,
   'bq-loyalty': 2,

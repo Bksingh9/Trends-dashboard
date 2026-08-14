@@ -129,7 +129,11 @@ export function reportDateFromTs(ts: string): string {
 export class SlackCatalogueReportConnector extends BaseConnector<SlackMessage, CatalogueDailyRow> {
   readonly id = 'slack-catalogue-report';
   readonly displayName = 'Slack — Tatsu Scan Catalog Daily Report';
-  readonly freshnessSlaMinutes = 36 * 60;
+  // 90 minutes, not 36 hours. The report is titled "Daily" but is posted every
+  // hour — confirmed by reading #sng-catalogue-lack, where every message covers
+  // a one-hour window. At 36h a genuine two-hour outage of the sync pipeline
+  // would have gone unremarked for a day and a half.
+  readonly freshnessSlaMinutes = 90;
   readonly costTier: CostTier = 'free';
   readonly priority = 'P0' as const;
   readonly powers = ['/catalogue', 'unique_coverage', 'total_coverage', 'missing_distinct', 'Manhattan chart'];

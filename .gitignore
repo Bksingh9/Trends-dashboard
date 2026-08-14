@@ -11,3 +11,12 @@ build
 next-env.d.ts
 coverage
 /docs/source/*.csv
+
+# Service-account keys. Never committed — a private key in git history is
+# compromised permanently, and `git rm` does not undo it. Keys live outside the
+# repo and reach the app through GCP_SA_KEY_JSON.
+*.sa.json
+*service-account*.json
+*serviceaccount*.json
+gcp-*.json
+**/credentials.json
