@@ -6,6 +6,13 @@
  *
  * This is how "data honesty is not optional" (rule 2) is made structural rather
  * than a matter of remembering.
+ *
+ * On the visual treatment: the state badge and a single edge accent carry the
+ * data state. An earlier version also striped the whole card surface, which made
+ * every number sit on a busy background and read worse — and a KPI you have to
+ * work to read is not a more honest KPI, just a noisier one. §10.4's restraint
+ * rule applies to the honesty signals too: colour encodes state, and one signal
+ * per state is enough.
  */
 import { cn } from '@/lib/cn';
 import { formatByUnit, formatPct, formatPp } from '@/lib/format/currency';
@@ -27,6 +34,16 @@ function deltaTone(delta: number | null, direction: MetricValue['direction']): s
   const good = direction === 'up_good' ? delta > 0 : delta < 0;
   return good ? 'text-[var(--color-scan)]' : 'text-[var(--color-alert)]';
 }
+
+/** One quiet edge accent per state, instead of a full-surface treatment. */
+const STATE_ACCENT: Record<MetricValue['state'], string> = {
+  live: 'before:bg-transparent',
+  cache: 'before:bg-[var(--color-edge)]',
+  fixture: 'before:bg-[var(--color-warn)]/55',
+  stale: 'before:bg-[var(--color-warn)]',
+  missing: 'before:bg-[var(--color-alert)]/70',
+  not_instrumented: 'before:bg-[var(--color-edge)]',
+};
 
 export function KpiCard({ metric, compareLabel, size = 'md', className, href }: KpiCardProps) {
   if (metric.state === 'not_instrumented') {
@@ -50,27 +67,32 @@ export function KpiCard({ metric, compareLabel, size = 'md', className, href }: 
   return (
     <Wrapper
       {...(href ? { href } : {})}
+      data-metric-id={metric.id}
+      data-state={metric.state}
       className={cn(
-        'group flex min-w-0 flex-col justify-between rounded border border-[var(--color-edge)] bg-[var(--surface)] p-4',
+        'group relative flex min-w-0 flex-col overflow-hidden rounded border border-[var(--color-edge)] bg-[var(--surface)] p-4',
+        // The state accent: a 2px bar down the leading edge. Present enough to
+        // scan a grid for non-live cards, quiet enough to leave the number alone.
+        'before:absolute before:inset-y-0 before:left-0 before:w-[2px] before:content-[""]',
+        STATE_ACCENT[metric.state],
         href && 'transition-colors hover:border-[var(--color-ion)]/60',
-        metric.state === 'fixture' && 'fixture-stripe',
         className,
       )}
     >
-      {/* min-height keeps values aligned across a row when a label wraps to two
-          lines — a ragged KPI strip is harder to scan at a glance. */}
-      <div className="mb-3 flex min-h-8 items-start justify-between gap-2">
+      <div className="mb-2 flex min-h-8 items-start justify-between gap-2">
         <div className="flex min-w-0 items-start gap-1.5">
-          <span className="label">{metric.label}</span>
+          <span className="label leading-tight">{metric.label}</span>
           {metric.ambiguous && metric.caveat && <AmbiguityMarker reason={metric.caveat} />}
           {!metric.ambiguous && metric.caveat && <CautionMarker reason={metric.caveat} />}
         </div>
-        <StatePill state={metric.state} />
+        {/* The badge is the primary state signal, so only non-live states show
+            one — a grid of "LIVE" pills would be pure chrome. */}
+        {metric.state !== 'live' && <StatePill state={metric.state} className="shrink-0" />}
       </div>
 
-      <div className="flex min-w-0 flex-wrap items-baseline gap-2">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
         <span
-          className={cn('num font-medium', valueSize)}
+          className={cn('num font-medium tracking-tight', valueSize)}
           title={`${metric.formula}${metric.value == null ? ' — no value available' : ''}`}
         >
           {formatByUnit(metric.value, metric.unit)}
@@ -84,25 +106,31 @@ export function KpiCard({ metric, compareLabel, size = 'md', className, href }: 
         <div className="mt-0.5 text-2xs text-[var(--text-muted)]">{compareLabel}</div>
       )}
 
-      {/* Mandatory lineage. Every number carries its source, grain, and
-          last-refreshed time (rule 2, §6.3, §14.5). */}
-      <dl className="mt-3 space-y-0.5 border-t border-[var(--color-edge)] pt-2 text-2xs text-[var(--text-muted)]">
-        <div className="flex justify-between gap-2">
-          <dt className="shrink-0">Source</dt>
-          {/* min-w-0 is what lets `truncate` actually truncate: without it the
-              flex item refuses to shrink below its content width and drags the
-              whole card past the viewport on a phone. */}
-          <dd className="min-w-0 truncate text-right" title={metric.source}>
+      {/* Mandatory lineage (rule 2, §6.3, §14.5) — every number carries its
+          source, grain and last-refreshed time. Compact two lines rather than a
+          three-row table: the provenance has to be present and checkable, not
+          to outweigh the number it describes. */}
+      <dl className="mt-auto flex flex-col gap-0.5 pt-3 text-2xs text-[var(--text-muted)]">
+        <div className="flex min-w-0 items-baseline gap-1.5">
+          <dt data-provenance="source" className="sr-only">
+            Source
+          </dt>
+          <dd className="min-w-0 truncate" title={metric.source}>
             {metric.source}
           </dd>
         </div>
-        <div className="flex justify-between gap-2">
-          <dt>Grain</dt>
-          <dd className="num">{metric.grain}</dd>
-        </div>
-        <div className="flex justify-between gap-2">
-          <dt>Refreshed</dt>
-          <dd className="num">{relativeAge(metric.fetchedAt)}</dd>
+        <div className="flex items-baseline gap-1.5">
+          <dt data-provenance="grain" className="sr-only">
+            Grain
+          </dt>
+          <dd className="num shrink-0">{metric.grain}</dd>
+          <span aria-hidden className="text-[var(--color-edge)]">
+            ·
+          </span>
+          <dt data-provenance="refreshed" className="sr-only">
+            Refreshed
+          </dt>
+          <dd className="num truncate">{relativeAge(metric.fetchedAt)}</dd>
         </div>
       </dl>
     </Wrapper>

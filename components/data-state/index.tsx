@@ -85,7 +85,7 @@ export function FixtureBadge({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        'fixture-stripe inline-flex items-center gap-1 rounded border border-[var(--color-warn)]/50 px-1.5 py-0.5 text-2xs uppercase tracking-wider text-[var(--color-warn)]',
+        'inline-flex items-center gap-1 rounded border border-[var(--color-warn)]/50 bg-[var(--color-warn)]/10 px-1.5 py-0.5 text-2xs uppercase tracking-wider text-[var(--color-warn)]',
         className,
       )}
       title="Fixture data — this connector is not configured. Not a live number."
@@ -119,7 +119,6 @@ export function StatePill({ state, className }: { state: DataSourceState; classN
       className={cn(
         'inline-flex items-center rounded border px-1.5 py-0.5 text-2xs uppercase tracking-wider',
         STATE_CLASS[state],
-        state === 'fixture' && 'fixture-stripe',
         className,
       )}
     >

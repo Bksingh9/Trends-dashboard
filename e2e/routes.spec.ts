@@ -49,10 +49,10 @@ test.describe('data honesty (rule 2)', () => {
   for (const route of ROUTES) {
     test(`${route.path} — every KPI card carries full provenance`, async ({ page }) => {
       await page.goto(route.path, { waitUntil: 'networkidle' });
-      const sources = await page.locator('dt', { hasText: 'Source' }).count();
+      const sources = await page.locator('dt[data-provenance="source"]').count();
       if (sources === 0) test.skip(true, 'no KPI cards on this route');
-      const grains = await page.locator('dt', { hasText: 'Grain' }).count();
-      const refreshed = await page.locator('dt', { hasText: 'Refreshed' }).count();
+      const grains = await page.locator('dt[data-provenance="grain"]').count();
+      const refreshed = await page.locator('dt[data-provenance="refreshed"]').count();
       // A card that renders a number without saying where it came from is the
       // failure this whole design exists to prevent.
       expect(grains, 'grain count must match source count').toBe(sources);
