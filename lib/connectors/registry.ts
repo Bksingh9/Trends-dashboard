@@ -71,13 +71,17 @@ export async function connectorStatuses(): Promise<ConnectorStatus[]> {
       // grey = never configured, so it is not a failure — it is a known blocker.
       const health: ConnectorStatus['health'] = !d.configured
         ? 'grey'
-        : abandoned || run?.status === 'fail'
-          ? 'red'
-          : run?.status === 'warn' || (!withinSla && run != null)
-            ? 'amber'
-            : run?.status === 'success'
-              ? 'green'
-              : 'grey';
+        // Seeded is loaded, but it is not live. Green here would mean the board
+        // vouches for data that came out of a fixture file.
+        : run?.seeded
+          ? 'grey'
+          : abandoned || run?.status === 'fail'
+            ? 'red'
+            : run?.status === 'warn' || (!withinSla && run != null)
+              ? 'amber'
+              : run?.status === 'success'
+                ? 'green'
+                : 'grey';
 
       return {
         ...d,
@@ -98,6 +102,7 @@ export async function connectorStatuses(): Promise<ConnectorStatus[]> {
         assertions: run?.assertions ?? [],
         health,
         running: running && !abandoned,
+        seeded: run?.seeded ?? false,
         nextDueInMinutes:
           freshnessMinutes == null ? 0 : Math.max(0, Math.round(d.freshnessSlaMinutes - freshnessMinutes)),
       };

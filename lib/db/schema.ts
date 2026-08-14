@@ -373,6 +373,16 @@ export const etlRunLog = pgTable(
     windowEnd: timestamp('window_end', { withTimezone: true }),
     assertions: jsonb('assertions'),
     error: text('error'),
+    /**
+     * True when the rows came from fixtures rather than the upstream source.
+     *
+     * Seeding exists so the load path is exercised before the first real
+     * credential arrives — otherwise the first production run is also the
+     * first time `load()` has ever executed. This flag is what stops the
+     * result being indistinguishable from live data afterwards: the serving
+     * layer reads it and reports the mart as `fixture`, whatever is in it.
+     */
+    seeded: boolean('seeded').notNull().default(false),
   },
   (t) => [index('etl_run_log_connector_idx').on(t.connector, t.startedAt)],
 );

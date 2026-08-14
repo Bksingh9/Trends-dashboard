@@ -23,6 +23,8 @@ export interface RunRecord {
   windowEnd: string | null;
   assertions: AssertionVerdict[];
   error: string | null;
+  /** Rows came from fixtures, not the upstream source — never treat as live. */
+  seeded: boolean;
   /** True when this record lives only in process memory (no DATABASE_URL). */
   ephemeral: boolean;
 }
@@ -62,6 +64,7 @@ export async function startRun(
     windowEnd: window.end,
     assertions: [],
     error: null,
+    seeded: false,
     ephemeral: true,
   });
   return runId;
@@ -75,6 +78,7 @@ export async function finishRun(
     bytesScanned?: number;
     assertions?: AssertionVerdict[];
     error?: string;
+    seeded?: boolean;
   },
 ): Promise<void> {
   const finishedAt = new Date();
@@ -89,6 +93,7 @@ export async function finishRun(
         bytesScanned: outcome.bytesScanned ?? null,
         assertions: outcome.assertions ?? [],
         error: outcome.error ?? null,
+        seeded: outcome.seeded ?? false,
       })
       .where(eq(etlRunLog.runId, runId));
     return;
@@ -101,6 +106,7 @@ export async function finishRun(
     rec.bytesScanned = outcome.bytesScanned ?? null;
     rec.assertions = outcome.assertions ?? [];
     rec.error = outcome.error ?? null;
+    rec.seeded = outcome.seeded ?? false;
   }
 }
 
@@ -127,6 +133,7 @@ export async function lastRunFor(connector: string): Promise<RunRecord | null> {
       windowEnd: r.windowEnd?.toISOString() ?? null,
       assertions: (r.assertions ?? []) as AssertionVerdict[],
       error: r.error,
+      seeded: r.seeded ?? false,
       ephemeral: false,
     };
   }
@@ -180,6 +187,7 @@ export async function recentRuns(limit = 50): Promise<RunRecord[]> {
       windowEnd: r.windowEnd?.toISOString() ?? null,
       assertions: (r.assertions ?? []) as AssertionVerdict[],
       error: r.error,
+      seeded: r.seeded ?? false,
       ephemeral: false,
     }));
   }

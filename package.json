@@ -15,6 +15,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
     "etl:run": "tsx scripts/etl.ts run",
+    "etl:seed": "tsx scripts/etl.ts seed",
     "etl:backfill": "tsx scripts/etl.ts backfill",
     "etl:status": "tsx scripts/etl.ts status",
     "verify:browser": "tsx scripts/verify-browser.ts",

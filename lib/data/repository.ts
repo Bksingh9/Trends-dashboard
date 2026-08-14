@@ -79,12 +79,15 @@ export async function freshnessOf(
   // Injected so the rule can be tested against a run history that does not
   // exist yet — there is no way to make a real connector two weeks stale
   // inside a test run.
-  readRun: (id: string) => Promise<Pick<RunRecord, 'finishedAt' | 'status' | 'error'> | null> = lastRunFor,
-): Promise<{ state: 'live' | 'stale'; warnings: string[] }> {
+  readRun: (
+    id: string,
+  ) => Promise<Pick<RunRecord, 'finishedAt' | 'status' | 'error' | 'seeded'> | null> = lastRunFor,
+): Promise<{ state: 'live' | 'stale' | 'fixture'; warnings: string[] }> {
   if (connectorIds.length === 0) return { state: 'live', warnings: [] };
 
   const warnings: string[] = [];
   let stale = false;
+  let seeded = false;
 
   for (const id of connectorIds) {
     const connector = getConnector(id);
@@ -96,6 +99,18 @@ export async function freshnessOf(
     if (!run?.finishedAt) {
       stale = true;
       warnings.push(`${id} has no completed run on record — nothing is refreshing this data.`);
+      continue;
+    }
+
+    // Seeded rows are fixtures that happen to live in Postgres. The row count
+    // and the query success prove nothing about provenance, so the flag on the
+    // run is the only thing standing between a seeded mart and a page that
+    // claims to be live.
+    if (run.seeded) {
+      seeded = true;
+      warnings.push(
+        `${id} was seeded from fixtures, not loaded from its real source — these rows are illustrative.`,
+      );
       continue;
     }
 
@@ -114,7 +129,9 @@ export async function freshnessOf(
     }
   }
 
-  return { state: stale ? 'stale' : 'live', warnings };
+  // Fixture outranks stale: "this is not real data" is the more important thing
+  // to say, and saying "stale" of a fixture implies it was ever current.
+  return { state: seeded ? 'fixture' : stale ? 'stale' : 'live', warnings };
 }
 
 function formatAge(minutes: number): string {

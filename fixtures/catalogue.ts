@@ -335,3 +335,105 @@ export const FIXTURE_RAW_SCAN_VALUES = [
   '',
   '8905527894113',
 ] as const;
+
+/**
+ * §20.2 — the product master, as `dim_product` sees it.
+ *
+ * Derived from the same scan rows as everything else in this file, and that is
+ * the whole point: the gap reasons on `/catalogue` are a *join* between what
+ * customers scanned and what the master contains, so a product fixture invented
+ * independently would make that join reconcile to nothing.
+ *
+ * The rules below encode the §20.3 reason taxonomy as data rather than as a
+ * label, so the classifier is exercised against a master that genuinely has the
+ * shape it claims:
+ *
+ *   found EAN                            → present, mapped, active
+ *   absent_from_master                   → not present at all
+ *   category_not_mapped                  → present with a null category
+ *   ean_assigned_to_multiple_item_codes  → present twice under two item codes
+ *   item_inactive                        → present but is_active = false
+ *
+ * Deliberately not 3 lakh rows. The real master is that size and the volume
+ * would be noise; what matters here is that every branch of the classifier has
+ * at least one real row to land on.
+ */
+export interface ProductMasterRow {
+  itemCode: string;
+  ean: string;
+  name: string;
+  brand: string;
+  category: string | null;
+  categoryMapped: boolean;
+  isActive: boolean;
+}
+
+const BRANDS = ['Trends', 'Avaasa', 'Netplay', 'Performax', 'Fig', 'DNMX', 'Rio', 'Teamspirit'];
+const CATEGORIES = ['Menswear', 'Womenswear', 'Kidswear', 'Footwear', 'Accessories', 'Innerwear'];
+
+export function fixtureProductMaster(window: DateWindow): ProductMasterRow[] {
+  const scans = fixtureScanRows(window);
+  const gaps = new Map(fixtureGaps(window).map((g) => [g.ean, g]));
+
+  // Every EAN the scan feed has ever seen is a candidate for the master. What
+  // the master does with it is what distinguishes the reasons.
+  const eans = [...new Set(scans.map((s) => s.ean))].sort();
+  const out: ProductMasterRow[] = [];
+
+  for (const ean of eans) {
+    const gap = gaps.get(ean);
+    const rng = makeRng(hashSeed(`product:${ean}`));
+    const base = {
+      ean,
+      name: `Item ${ean.slice(-6)}`,
+      brand: BRANDS[Math.floor(rng() * BRANDS.length)],
+      category: CATEGORIES[Math.floor(rng() * CATEGORIES.length)] as string | null,
+      categoryMapped: true,
+      isActive: true,
+    };
+
+    // A successful scan is, by definition, an EAN the master resolves cleanly.
+    if (!gap) {
+      out.push({ ...base, itemCode: `ITM${hashSeed(`item:${ean}`) % 900_000 + 100_000}` });
+      continue;
+    }
+
+    switch (gap.suspectedReason) {
+      case 'absent_from_master':
+        // The row simply does not exist. That absence is the finding.
+        break;
+
+      case 'category_not_mapped':
+        out.push({
+          ...base,
+          itemCode: `ITM${hashSeed(`item:${ean}`) % 900_000 + 100_000}`,
+          category: null,
+          categoryMapped: false,
+        });
+        break;
+
+      case 'ean_assigned_to_multiple_item_codes':
+        // The outbound case the §20.2 duplicate-assignment subquery detects
+        // mechanically. Two item codes, one EAN — so the join fans out and the
+        // scan cannot resolve to a single product.
+        out.push({ ...base, itemCode: `ITM${hashSeed(`item:${ean}`) % 900_000 + 100_000}` });
+        out.push({ ...base, itemCode: `ITM${hashSeed(`dupe:${ean}`) % 900_000 + 100_000}` });
+        break;
+
+      case 'item_inactive':
+        out.push({
+          ...base,
+          itemCode: `ITM${hashSeed(`item:${ean}`) % 900_000 + 100_000}`,
+          isActive: false,
+        });
+        break;
+
+      default:
+        // store_inventory_mismatch and unknown are not master-side problems —
+        // the row is fine, the failure is elsewhere.
+        out.push({ ...base, itemCode: `ITM${hashSeed(`item:${ean}`) % 900_000 + 100_000}` });
+    }
+  }
+
+  return out;
+}

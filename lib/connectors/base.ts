@@ -133,6 +133,82 @@ export abstract class BaseConnector<TRow, TNormalised = TRow> {
     }
   }
 
+  /**
+   * Runs the real lifecycle over fixture rows: transform → assertions → load.
+   *
+   * This exists because `fixtureFallback` deliberately does *not* load, which
+   * means that until the first credential arrives, every connector's `load()`
+   * has never executed even once. The first production run would then also be
+   * the first test of the idempotent upsert (§27.5) — on real data, against a
+   * real mart, with nothing to compare against. Seeding moves that discovery to
+   * a local database where getting it wrong costs nothing.
+   *
+   * Two guards make it safe:
+   *
+   *  - **It refuses to run in production.** Fixture rows in a production mart
+   *    would be indistinguishable from real ones at the row level; there is no
+   *    honest way to un-mix them afterwards.
+   *  - **The run is flagged `seeded`.** The serving layer reads that flag and
+   *    reports the mart as `fixture` no matter how many rows it holds, so a
+   *    seeded page never renders as live (§14.5).
+   */
+  async seed(w: DateWindow): Promise<ConnectorResult<TNormalised>> {
+    if (process.env.NODE_ENV === 'production' && process.env.ALLOW_FIXTURE_SEED !== 'i-understand') {
+      throw new Error(
+        `Refusing to seed ${this.id} in production: fixture rows in a production mart cannot be told apart from real ones afterwards.`,
+      );
+    }
+
+    const runId = await startRun(this.id, w);
+    // `fixture()` returns rows already in normalised shape — that is its
+    // contract, since `fixtureFallback` hands them straight to the UI. Running
+    // `transform` over them again would be transforming twice.
+    const rows = this.fixture(w);
+
+    // The gate runs on seeded rows too. Skipping it here would mean the
+    // assertions are never exercised until a real load, which is the same
+    // deferred-discovery problem this method exists to solve — and a fixture
+    // that cannot pass its own connector's assertions is a broken fixture.
+    const verdicts = await runAssertions(this.assertions, rows, {
+      connector: this.id,
+      window: w,
+      trailingRowCounts: await trailingRowCounts(this.id),
+    });
+
+    if (worstLevel(verdicts) === 'fail') {
+      await finishRun(runId, {
+        status: 'fail',
+        assertions: verdicts,
+        seeded: true,
+        error: `Fixture failed its own connector's assertions: ${failureSummary(verdicts)}`,
+      });
+      return {
+        ok: false,
+        rows: [],
+        meta: this.meta(w, 0, 'fixture', ['Seed blocked — the fixture does not satisfy this connector’s assertions']),
+        error: { code: 'assertion_failed', message: failureSummary(verdicts), retryable: false },
+        assertions: verdicts,
+      };
+    }
+
+    const loaded = await this.load(rows);
+    await finishRun(runId, {
+      status: worstLevel(verdicts) === 'warn' ? 'warn' : 'success',
+      rowsIngested: loaded.rowsIngested,
+      assertions: verdicts,
+      seeded: true,
+    });
+
+    return {
+      ok: true,
+      rows,
+      meta: this.meta(w, loaded.rowsIngested, 'fixture', [
+        `Seeded ${loaded.rowsIngested} fixture rows into ${loaded.table} — this mart is not live data`,
+      ]),
+      assertions: verdicts,
+    };
+  }
+
   protected async fixtureFallback(
     runId: number,
     w: DateWindow,

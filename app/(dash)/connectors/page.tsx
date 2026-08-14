@@ -59,7 +59,24 @@ export default async function ConnectorsPage() {
           <span className="text-[var(--text-muted)]">no</span>
         ),
     },
-    { key: 'last', header: 'Last run', numeric: true, render: (c) => relativeAge(c.lastRunAt) },
+    {
+      key: 'last',
+      header: 'Last run',
+      numeric: true,
+      render: (c) => (
+        <span className="flex items-center justify-end gap-1.5">
+          {relativeAge(c.lastRunAt)}
+          {c.seeded && (
+            <span
+              className="rounded border border-[var(--color-warn)]/50 px-1 text-2xs text-[var(--color-warn)]"
+              title="This mart holds fixture rows loaded by `etl seed`, not data from the real source. Every page built on it renders as fixture."
+            >
+              seeded
+            </span>
+          )}
+        </span>
+      ),
+    },
     {
       key: 'sla',
       header: 'Freshness SLA',

@@ -131,3 +131,69 @@ dashboard, and a WebSocket buys nothing here but a reconnect state machine.
   than running them to watch them fall back to fixtures, which would fill the
   log with noise that hides real failures. The moment a credential lands, the
   connection doctor proves each hop and the next tick runs it.
+
+---
+
+## Addendum — the load path, proven (2026-08-14)
+
+Running the connectors against a real Postgres turned up the gap the rest of
+this ADR could not see: **`load()` had never executed, for any connector.**
+
+`fixtureFallback` deliberately does not load — it hands fixture rows straight to
+the UI. Since no credential is configured, every connector took that path every
+time. So the idempotent upsert each connector declares (§27.5) was code nobody
+had ever run, and the first production load would have been its first test: on
+real data, against a real mart, with nothing to compare against.
+
+### `etl seed`
+
+A production-guarded mode that drives each connector's real `transform →
+assertions → load` over its fixtures. It runs twice and compares row counts,
+because an upsert that is not idempotent returns a different number the second
+time and that is the cheapest possible way to find out.
+
+It found real defects immediately:
+
+- **`bq-catalogue-master` had no fixture at all**, so it hard-failed its own
+  `rowVolume` gate and its load path stayed untested. It now has a product
+  master derived from the *same scan rows* as the gap register — which matters,
+  because the §20.3 gap reasons are a join between what customers scanned and
+  what the master contains. A product fixture invented independently would make
+  every gap classify as `absent_from_master`. Each reason in the taxonomy is
+  encoded as master-side data (missing row, null category, duplicate item code,
+  inactive flag) so every branch of the classifier has a row to land on.
+- **`ga4-api` and `amplitude` still have no fixture.** They are deferred
+  (§13.8, §24), and the seed now reports them as `none — load path unexercised`
+  rather than a green zero. A test names them explicitly, so a fifteenth
+  connector without a fixture fails rather than passing silently.
+- Seeding a connector's own incremental window (2 days for `bq-orders`) is
+  correct for the connector and useless for the person who then opens `/sales`
+  and finds a 90-day chart with two days on it. It defaults to 90 days.
+
+### Seeded is not live, and not stale either
+
+Fixture rows in a real table are indistinguishable from real ones at the row
+level — the row count and the query success prove nothing about provenance. So
+the run is flagged `seeded` in `etl_run_log`, and `freshnessOf` reads that flag
+and reports the mart as `fixture` whatever it holds, naming the connector. The
+board shows the connector grey with a `seeded` badge rather than green: green
+would mean the dashboard vouches for data that came out of a fixture file.
+
+`fixture` outranks `stale` in that precedence, because calling a fixture stale
+implies it was ever current.
+
+Seeding refuses to run under `NODE_ENV=production` behind an escape hatch that
+is deliberately awkward to type (`ALLOW_FIXTURE_SEED=i-understand`), because
+reaching for it should be a decision rather than a reflex.
+
+### What this does and does not prove
+
+Verified against a real PostgreSQL 16: 12 of 14 connectors load, all of them
+idempotently, 11,664 rows across the marts; the pages read those marts and
+render them as `fixture` with the honest warning. The full E2E suite passes
+identically with and without `DATABASE_URL`, so neither path is a special case.
+
+It does **not** prove any connector can talk to its real upstream. That still
+needs credentials. What it does mean is that when a credential arrives, the only
+untested step left is `extract` — and the connection doctor is built to prove
+exactly that hop.

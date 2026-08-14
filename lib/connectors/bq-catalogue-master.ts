@@ -10,6 +10,8 @@ import { cardinality, nullRate, rowVolume } from '@/lib/assertions';
 import { normalizeEan } from '@/lib/format/ean';
 import { normalizeItemCode } from '@/lib/format/keys';
 import { isBigQueryConfigured, runQuery } from '@/lib/gcp/bigquery';
+import { fixtureProductMaster } from '@/fixtures/catalogue';
+import type { DateWindow } from '@/lib/format/dates';
 import { BaseConnector } from './base';
 import type { Assertion, CostTier, LoadResult } from './types';
 
@@ -110,15 +112,23 @@ export class BqCatalogueMasterConnector extends BaseConnector<RawItem, ProductRo
     return { rowsIngested: rows.length, table: 'dim_product' };
   }
 
-  protected fixture(): ProductRow[] {
-    // The gap classifier is exercised by the fixture gap register instead; a
-    // 3-lakh-row product fixture would be noise.
-    return [];
+  protected fixture(w: DateWindow): ProductRow[] {
+    // Derived from the same scan rows as the gap register, so the §20.3 reason
+    // join actually reconciles. An independently-invented product fixture would
+    // make every gap read as `absent_from_master`.
+    //
+    // Not 3 lakh rows — the real master is that size and the volume would be
+    // noise here. What matters is that every branch of the classifier has a
+    // real row to land on.
+    return fixtureProductMaster(w);
   }
 
   readonly assertions: Assertion<ProductRow>[] = [
     rowVolume<ProductRow>({ tolerance: 0.5, zeroIsFail: true }),
     nullRate<ProductRow>({ columns: ['ean', 'itemCode'], max: 0.01, level: 'fail' }),
+    // Warn, not fail: the real master carries ~3 lakh EANs and a collapse to a
+    // few thousand means the unnest broke. The fixture is deliberately smaller,
+    // so this warns there rather than blocking the seed.
     cardinality<ProductRow>({ column: 'ean', minDistinct: 10_000, level: 'warn' }),
   ];
 }

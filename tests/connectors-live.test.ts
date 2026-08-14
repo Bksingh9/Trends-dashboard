@@ -8,7 +8,7 @@
  * something that notices a connector has not run, and something that makes the
  * cards say so.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CONNECTORS, connectorStatuses, getConnector } from '@/lib/connectors/registry';
 import { isDue, SNAPSHOT_CONNECTORS, tick, windowFor, WINDOW_DAYS } from '@/lib/connectors/scheduler';
 import { daysBetween } from '@/lib/format/dates';
@@ -164,6 +164,7 @@ describe('§14.5 — a stale mart never renders as live', () => {
       finishedAt: new Date(now - 14 * 86_400_000).toISOString(),
       status: 'success' as const,
       error: null,
+      seeded: false,
       runId: 1,
       startedAt: new Date(now - 14 * 86_400_000).toISOString(),
     }));
@@ -179,6 +180,7 @@ describe('§14.5 — a stale mart never renders as live', () => {
       finishedAt: new Date(now - 60_000).toISOString(),
       status: 'success' as const,
       error: null,
+      seeded: false,
       runId: 1,
       startedAt: new Date(now - 120_000).toISOString(),
     }));
@@ -202,6 +204,7 @@ describe('§14.5 — a stale mart never renders as live', () => {
       finishedAt: new Date(now - 60_000).toISOString(),
       status: 'fail' as const,
       error: 'row_volume: 40% below the trailing median',
+      seeded: false,
       runId: 1,
       startedAt: new Date(now - 120_000).toISOString(),
     }));
@@ -213,5 +216,101 @@ describe('§14.5 — a stale mart never renders as live', () => {
   it('is a no-op for a mart with no connector behind it', async () => {
     const { freshnessOf } = await import('@/lib/data/repository');
     expect(await freshnessOf([], async () => null)).toEqual({ state: 'live', warnings: [] });
+  });
+});
+
+describe('§14.5 — a seeded mart is fixture data, whatever is in Postgres', () => {
+  it('reports fixture, not live, when the last run was a seed', async () => {
+    // Seeding puts fixture rows in a real table. The row count and the query
+    // success prove nothing about provenance, so the flag on the run is the
+    // only thing between a seeded mart and a page claiming to be live.
+    const { freshnessOf } = await import('@/lib/data/repository');
+    const r = await freshnessOf(['bq-orders'], async () => ({
+      finishedAt: new Date().toISOString(),
+      status: 'success' as const,
+      error: null,
+      seeded: true,
+    }));
+    expect(r.state).toBe('fixture');
+    expect(r.warnings.join(' ')).toMatch(/seeded from fixtures/);
+  });
+
+  it('lets fixture outrank stale, because "not real" matters more than "old"', async () => {
+    const { freshnessOf } = await import('@/lib/data/repository');
+    const old = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    const r = await freshnessOf(['bq-orders'], async () => ({
+      finishedAt: old,
+      status: 'success' as const,
+      error: null,
+      seeded: true,
+    }));
+    // Calling a fixture "stale" implies it was ever current.
+    expect(r.state).toBe('fixture');
+  });
+});
+
+/* ── the load path, exercised ────────────────────────────────────────────── */
+
+describe('§27.5 — every connector can actually load', () => {
+  it('gives all but the deferred connectors a fixture to load', () => {
+    // A connector with no fixture has never executed its own `load()`. The
+    // first production run would then also be the first test of the idempotent
+    // upsert, on real data, with nothing to compare against.
+    //
+    // ga4-api and amplitude are deferred by §13.8 and §24 respectively — they
+    // are named here so the exemption is a decision rather than an oversight,
+    // and so adding a fifteenth connector without a fixture fails this test.
+    const deferred = new Set(['ga4-api', 'amplitude']);
+    const w = { start: '2026-08-01', end: '2026-08-02' };
+
+    for (const c of CONNECTORS) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rows = (c as any).fixture(w) as unknown[];
+      if (deferred.has(c.id)) {
+        expect(rows.length, `${c.id} is listed as deferred but now has a fixture`).toBe(0);
+      } else {
+        expect(rows.length, `${c.id} has no fixture, so its load path is untested`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('refuses to seed a production mart', async () => {
+    // Fixture rows in a production mart cannot be told apart from real ones at
+    // the row level afterwards. There is no honest way to un-mix them.
+    const prev = process.env.NODE_ENV;
+    try {
+      vi.stubEnv('NODE_ENV', 'production');
+      await expect(CONNECTORS[0].seed({ start: '2026-08-01', end: '2026-08-02' })).rejects.toThrow(
+        /Refusing to seed/,
+      );
+
+      // …and the escape hatch is deliberately awkward to type, because
+      // reaching for it should be a decision rather than a reflex.
+      vi.stubEnv('ALLOW_FIXTURE_SEED', 'i-understand');
+      await expect(CONNECTORS[0].seed({ start: '2026-08-01', end: '2026-08-02' })).resolves.toBeTruthy();
+    } finally {
+      vi.unstubAllEnvs();
+      expect(process.env.NODE_ENV).toBe(prev);
+    }
+  });
+
+  it('runs the assertion gate over seeded rows too', async () => {
+    // A fixture that cannot pass its own connector's assertions is a broken
+    // fixture, and skipping the gate here would defer that discovery to the
+    // first real load — the same problem seeding exists to solve.
+    const w = { start: '2026-08-01', end: '2026-08-02' };
+    const orders = getConnector('bq-orders')!;
+    const result = await orders.seed(w);
+    expect(result.assertions, 'seed ran no assertions').toBeDefined();
+    expect(result.assertions!.length).toBeGreaterThan(0);
+  });
+
+  it('marks the seeded run so the serving layer can never call it live', async () => {
+    const w = { start: '2026-08-01', end: '2026-08-02' };
+    await getConnector('sentry')!.seed(w);
+    const run = await (await import('@/lib/connectors/run-log')).lastRunFor('sentry');
+    expect(run?.seeded).toBe(true);
+    // …and the metadata says so in words, not just a flag.
+    expect(run?.status === 'success' || run?.status === 'warn').toBe(true);
   });
 });

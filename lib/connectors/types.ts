@@ -90,6 +90,8 @@ export interface ConnectorStatus extends ConnectorDescriptor {
   health: 'green' | 'amber' | 'red' | 'grey';
   /** A run is in flight right now (and has not been abandoned). */
   running: boolean;
+  /** The mart holds fixture rows loaded by `etl seed`, not real source data. */
+  seeded: boolean;
   /** Minutes until the scheduler will pick this up again. 0 means due now. */
   nextDueInMinutes: number;
 }

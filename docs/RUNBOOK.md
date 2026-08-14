@@ -95,6 +95,31 @@ asserts this.
 
 ---
 
+## Bringing a fresh database to life
+
+```bash
+export DATABASE_URL=postgres://…
+npm run db:push          # create the marts
+npm run etl:seed         # load every connector's fixtures through its real load()
+npm run etl:status       # what is in there, and what is due
+```
+
+`etl:seed` is not a shortcut around the connectors — it drives each one's real
+`transform → assertions → load`. Its purpose is that `load()` *runs* before the
+first credential arrives, so the first production load is not also the first
+execution of an idempotent upsert nobody has ever tested. It runs twice and
+compares row counts, because an upsert that is not idempotent produces a
+different number the second time.
+
+Seeded runs are flagged in `etl_run_log`, and the serving layer reads that flag:
+every page built on a seeded mart renders as **fixture**, whatever the row count
+says, and names the connector that was seeded. Seeding refuses to run against
+`NODE_ENV=production` — fixture rows in a production mart cannot be told apart
+from real ones afterwards.
+
+Once real credentials are in place, `npm run etl:run -- --all` replaces the
+seeded rows and the flag clears on the next successful run.
+
 ## Common operations
 
 ```bash
