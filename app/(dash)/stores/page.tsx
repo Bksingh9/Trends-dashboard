@@ -39,7 +39,13 @@ export default async function StoresPage() {
     { key: 'city', header: 'City', render: (r) => r.city },
     { key: 'state', header: 'State', render: (r) => r.state },
     { key: 'act', header: 'Activated', numeric: true, render: (r) => r.activatedOn ?? '—' },
-    { key: 'o0', header: 'Today', numeric: true, render: (r) => formatCount(r.ordersToday) },
+    {
+      key: 'o0',
+      header: mod.window.end,
+      title: "Orders on the window's last day. Trailing windows end yesterday, because today is still partial.",
+      numeric: true,
+      render: (r) => formatCount(r.ordersOnLatestDay),
+    },
     { key: 'o7', header: '7d', numeric: true, render: (r) => formatCount(r.orders7d) },
     { key: 'o28', header: '28d', numeric: true, render: (r) => formatCount(r.orders28d) },
     { key: 'rev', header: 'Revenue 28d', numeric: true, render: (r) => formatINR(r.revenue28d) },
@@ -184,8 +190,17 @@ export default async function StoresPage() {
       <DataTable
         caption="Dark-store worklist — zero orders in 7 days"
         columns={darkCols}
-        rows={darkWorklist.slice(0, 100)}
+        rows={darkWorklist}
         rowKey={(r) => r.storeId}
+        truncation={{
+          limit: 100,
+          sortKey: 'days dark, longest first',
+          noun: 'dark stores',
+          residual: (hidden) =>
+            `${formatCount(
+              hidden.reduce((a, r) => a + (ops.get(r.storeId)?.footfallDaily ?? 0), 0),
+            )} footfall/day behind them`,
+        }}
         sourceNote="fact_store_adoption_daily × dim_store × fact_store_ops"
         emptyMessage="No dark stores — every live store transacted this week"
         maxHeight={360}

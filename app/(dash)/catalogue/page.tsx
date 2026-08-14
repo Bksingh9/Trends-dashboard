@@ -14,7 +14,16 @@ export const dynamic = 'force-dynamic';
 
 export default async function CataloguePage() {
   const [mod, t, strip] = await Promise.all([catalogueModule(), getThresholds(), getScanStrip()]);
-  const { daily, gaps, ageBuckets, reasons, storeCoverage, auditedCoverage, reportGeneratedToday } = mod.data;
+  const {
+    daily,
+    gaps,
+    ageBuckets,
+    reasons,
+    storeCoverage,
+    auditedCoverage,
+    reportGeneratedToday,
+    gapReconciliation,
+  } = mod.data;
 
   const openGaps = gaps
     .filter((g) => g.status !== 'resolved' && g.status !== 'wontfix')
@@ -83,6 +92,23 @@ export default async function CataloguePage() {
       )}
 
       <KpiStrip metrics={mod.kpis} compareLabel="vs previous period" />
+
+      {/* §6.3 — the missing-EAN card counts every EAN observed failing; the
+          reason breakdown, the aging histogram and the register below count
+          only open gaps. Both are right, and the page has to say which is
+          which, or the two figures read as a contradiction. */}
+      <div
+        data-gap-reconciliation
+        className="rounded border border-[var(--color-edge)] bg-[var(--surface)] px-3 py-2 text-2xs text-[var(--text-muted)]"
+      >
+        <span className="label mr-2 text-[var(--text-primary)]">Missing EANs reconcile</span>
+        <span className="num">{gapReconciliation.line}</span>
+        <span className="ml-2">
+          — the breakdowns below count the{' '}
+          <span className="num">{gapReconciliation.open.toLocaleString('en-IN')}</span> open only, so
+          they will not sum to the card above.
+        </span>
+      </div>
 
       {/* §16.5.2 — three different measurements that will disagree. The
           difference between them is itself the finding. */}
@@ -157,7 +183,9 @@ export default async function CataloguePage() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <figure className="rounded border border-[var(--color-edge)] bg-[var(--surface)] p-4">
-          <figcaption className="label mb-1">Gap reasons</figcaption>
+          <figcaption className="label mb-1">
+            Gap reasons — {gapReconciliation.open.toLocaleString('en-IN')} open gaps
+          </figcaption>
           <p className="mb-3 text-2xs text-[var(--text-muted)]">
             Split inbound (mapping/ingestion) vs outbound (assignment/state). Config-driven taxonomy.
           </p>
@@ -188,7 +216,9 @@ export default async function CataloguePage() {
         </figure>
 
         <figure className="rounded border border-[var(--color-edge)] bg-[var(--surface)] p-4">
-          <figcaption className="label mb-1">Missing-EAN aging</figcaption>
+          <figcaption className="label mb-1">
+            Missing-EAN aging — {gapReconciliation.open.toLocaleString('en-IN')} open gaps
+          </figcaption>
           <p className="mb-3 text-2xs text-[var(--text-muted)]">
             A miss that is 30 days old is an ownership failure, not a data issue.
           </p>
@@ -236,19 +266,38 @@ export default async function CataloguePage() {
       <DataTable
         caption="Store × coverage — is the gap systemic or store-specific?"
         columns={storeCols}
-        rows={storeCoverage.slice(0, 60)}
+        rows={storeCoverage}
         rowKey={(s) => s.storeId}
         sourceNote="fact_scan_daily grouped by store_id"
         maxHeight={320}
+        truncation={{
+          limit: 60,
+          sortKey: 'coverage, worst first',
+          noun: 'stores',
+          // The residual here is a floor, not a sum: the stores below the cut
+          // are the *healthiest*, so what matters is that none of them is worse
+          // than the last row shown.
+          residual: (hidden) =>
+            hidden.length === 0
+              ? null
+              : `all at or above ${formatPct(Math.min(...hidden.map((s) => s.coverage ?? 1)), { precision: 2 })} coverage`,
+        }}
       />
 
       <DataTable
         caption="Missing EAN register"
         columns={gapCols}
-        rows={openGaps.slice(0, 400)}
+        rows={openGaps}
         rowKey={(g) => g.ean}
-        sourceNote="fact_catalogue_gap × dim_product — top 400 open gaps by scan volume"
+        sourceNote="fact_catalogue_gap × dim_product — open gaps only (resolved and won't-fix are excluded)"
         maxHeight={520}
+        truncation={{
+          limit: 400,
+          sortKey: 'scan volume',
+          noun: 'open gaps',
+          residual: (hidden) =>
+            `${formatCount(hidden.reduce((a, g) => a + g.scanCount, 0))} scans behind them`,
+        }}
       />
     </div>
   );

@@ -310,11 +310,14 @@ export const METRICS = {
     domain: 'stores',
     unit: 'ratio',
     direction: 'up_good',
-    formula: 'stores with ≥1 order today / active stores',
+    formula: "stores with ≥1 order on the window's last day / active stores",
     source: 'fact_store_adoption_daily',
     grain: 'day × store × state',
-    description: 'The NOC daily rhythm metric: did every active store transact today.',
+    description:
+      'The NOC daily rhythm metric: did every active store transact on the most recent day in view.',
     cadence: '60 min',
+    caveat:
+      "Anchored to the window's last day, not the wall clock. Trailing windows end yesterday because today is partial, so measuring against the wall clock made every store read zero and compliance read 0.0% — a business collapse that was really a date-range artefact.",
   },
   stores_dark: {
     id: 'stores_dark',

@@ -34,7 +34,7 @@ export interface MetricValue {
 
 export function metricValue(
   id: MetricId | string,
-  value: number | null,
+  valueOrPresence: number | null | Presence,
   opts: {
     state?: DataSourceState;
     fetchedAt?: string;
@@ -47,6 +47,21 @@ export function metricValue(
 ): MetricValue {
   const def = getMetric(id);
   if (!def) throw new Error(`Unknown metric id "${id}" — add it to §5 (lib/metrics/registry.ts) first`);
+
+  // A Presence carries its own state, and it wins over the caller's default:
+  // whoever computed the number knows whether the period was observed.
+  const isPresence =
+    valueOrPresence !== null && typeof valueOrPresence === 'object' && 'state' in valueOrPresence;
+  const value = isPresence ? (valueOrPresence as Presence).value : (valueOrPresence as number | null);
+  const presenceState = isPresence ? (valueOrPresence as Presence).state : undefined;
+  const presenceReason = isPresence ? (valueOrPresence as Presence).reason : undefined;
+
+  // A live-looking card with a null value is the exact ambiguity this guards.
+  const resolvedState =
+    presenceState === 'missing'
+      ? 'missing'
+      : (opts.state ?? presenceState ?? (value == null ? 'missing' : 'live'));
+
   return {
     id: def.id,
     label: def.label,
@@ -56,7 +71,7 @@ export function metricValue(
     source: opts.sourceOverride ?? def.source,
     grain: def.grain,
     fetchedAt: opts.fetchedAt ?? new Date().toISOString(),
-    state: opts.state ?? 'live',
+    state: resolvedState,
     formula: def.formula,
     description: def.description,
     deltaVsPrev: opts.deltaVsPrev ?? null,
@@ -64,8 +79,46 @@ export function metricValue(
     deltaPp: opts.deltaPp ?? null,
     caveat: def.caveat,
     ambiguous: def.ambiguous,
-    notInstrumentedReason: opts.notInstrumentedReason,
+    notInstrumentedReason: opts.notInstrumentedReason ?? presenceReason,
   };
+}
+
+/**
+ * §5.8 / §9.2 / §28.8 — "Never substitute zero for missing."
+ *
+ * Three outcomes have to stay distinguishable, and a bare `0` collapses them:
+ *
+ *   0                 a real measured zero — nobody ordered today
+ *   missing           no data exists for this grain in this window
+ *   not_instrumented  the event is absent from the container entirely
+ *
+ * A metric computed over a period the data does not cover reads 0 and looks
+ * like a business collapse. `presence()` forces the caller to say which case it
+ * is, at the point where it is actually known.
+ */
+export interface Presence {
+  value: number | null;
+  state: DataSourceState;
+  reason?: string;
+}
+
+export function measured(value: number): Presence {
+  return { value, state: 'live' };
+}
+
+/** No data for this grain in this window — the value is unknown, not zero. */
+export function noData(reason: string): Presence {
+  return { value: null, state: 'missing', reason };
+}
+
+/**
+ * Resolves a computed value against whether the underlying grain had any data
+ * at all. `hasData` is the caller's assertion that the period was observed.
+ */
+export function presence(value: number | null, hasData: boolean, reason: string): Presence {
+  if (!hasData) return noData(reason);
+  if (value == null) return noData(reason);
+  return { value, state: 'live' };
 }
 
 /* ── Safe arithmetic ─────────────────────────────────────────────────────── */
@@ -288,7 +341,8 @@ export interface StoreRollup {
   state: string;
   region: string;
   activatedOn: string | null;
-  ordersToday: number;
+  /** Orders on `asOf` — the window's last day, not the wall clock. */
+  ordersOnLatestDay: number;
   orders7d: number;
   orders28d: number;
   revenue28d: number;
@@ -300,10 +354,18 @@ export interface StoreRollup {
   isDark: boolean;
 }
 
+/**
+ * `asOf` is the window's last day, never the wall clock.
+ *
+ * Trailing windows end yesterday, because today is partial and a half-day of
+ * orders compared against a full one is not a comparison. Anchoring "today" to
+ * the wall clock therefore looked for orders on a date the window does not
+ * contain, found none, and reported every store as having sold nothing.
+ */
 export function rollupStores(
   dims: StoreDim[],
   daily: StoreDailyLike[],
-  today: string,
+  asOf: string,
   coverageByStore: Map<string, { scans: number; failed: number }> = new Map(),
 ): StoreRollup[] {
   const byStore = new Map<string, StoreDailyLike[]>();
@@ -322,8 +384,8 @@ export function rollupStores(
       const withOrders = rows.filter((r) => r.orders > 0);
       const lastOrderDate =
         withOrders.length > 0 ? withOrders.map((r) => r.dateKey).sort().at(-1)! : null;
-      const daysSince = lastOrderDate ? dayDiff(lastOrderDate, today) : null;
-      const inLast = (n: number) => rows.filter((r) => dayDiff(r.dateKey, today) < n);
+      const daysSince = lastOrderDate ? dayDiff(lastOrderDate, asOf) : null;
+      const inLast = (n: number) => rows.filter((r) => dayDiff(r.dateKey, asOf) < n);
       const cov = coverageByStore.get(s.storeId);
       return {
         storeId: s.storeId,
@@ -333,7 +395,7 @@ export function rollupStores(
         state: s.state,
         region: s.region,
         activatedOn: s.activatedOn,
-        ordersToday: sum(rows.filter((r) => r.dateKey === today).map((r) => r.orders)),
+        ordersOnLatestDay: sum(rows.filter((r) => r.dateKey === asOf).map((r) => r.orders)),
         orders7d: sum(inLast(7).map((r) => r.orders)),
         orders28d: sum(inLast(28).map((r) => r.orders)),
         revenue28d: sum(inLast(28).map((r) => r.revenue)),

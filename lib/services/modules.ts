@@ -17,12 +17,14 @@ import {
   median,
   metricValue,
   ppDelta,
+  presence,
   relativeDelta,
   rollupStates,
   rollupStores,
   type MetricValue,
   type StoreRollup,
 } from '@/lib/metrics/compute';
+import { reconcileGapRegister, type GapReconciliation } from '@/lib/metrics/reconcile';
 import {
   getAppHealth,
   getCatalogueDaily,
@@ -141,6 +143,12 @@ export async function salesModule(w: DateWindow = trailingWindow(90)): Promise<M
     return { dateKey, newCustomers: a.newCustomers, repeatCustomers: a.repeatCustomers };
   });
 
+  // §5.1 — every headline card on this page is confirmed-only, so every
+  // breakdown of it must be too. Mixing bases meant the state table summed to
+  // neither e-GMV nor net revenue, and the histogram counted 1,414 orders under
+  // a label that said 1,289.
+  const confirmedOrders = orders.rows.filter((o) => o.statusConfirmed);
+
   // Order value distribution — spot the ₹0 and outlier orders. These have been a
   // real data-quality tell (§4.2).
   const buckets = [0, 250, 500, 1000, 2000, 4000, 8000, Infinity];
@@ -148,13 +156,13 @@ export async function salesModule(w: DateWindow = trailingWindow(90)): Promise<M
     const hi = buckets[i + 1];
     return {
       bucket: hi === Infinity ? `₹${lo}+` : `₹${lo}–${hi}`,
-      count: orders.rows.filter((o) => o.netValue >= lo && o.netValue < hi).length,
+      count: confirmedOrders.filter((o) => o.netValue >= lo && o.netValue < hi).length,
     };
   });
 
   const storeById = new Map(stores.rows.map((s) => [s.storeId, s]));
   const byStore = new Map<string, { orders: number; revenue: number }>();
-  for (const o of orders.rows) {
+  for (const o of confirmedOrders) {
     const cur = byStore.get(o.storeId) ?? { orders: 0, revenue: 0 };
     cur.orders++;
     cur.revenue += o.netValue;
@@ -338,7 +346,10 @@ export async function storesModule(w: DateWindow = trailingWindow(28)): Promise<
   }
 
   const covByStore = coverageByStore(scans.rows);
-  const rows = rollupStores(stores.rows, [...dailyByStore.values()], today, covByStore);
+  // Anchored to the window's last day, never the wall clock. Trailing windows
+  // end yesterday because today is partial, so asking "did this store order
+  // today" of a window that does not contain today answered no for all 272.
+  const rows = rollupStores(stores.rows, [...dailyByStore.values()], w.end, covByStore);
   const totalByState = new Map<string, number>();
   for (const s of stores.rows) totalByState.set(s.state, (totalByState.get(s.state) ?? 0) + 1);
   const states = rollupStates(rows, totalByState);
@@ -346,7 +357,14 @@ export async function storesModule(w: DateWindow = trailingWindow(28)): Promise<
   const live = rows.length;
   const active = rows.filter((r) => r.orders7d > 0).length;
   const dark = rows.filter((r) => r.isDark).length;
-  const orderedToday = rows.filter((r) => r.ordersToday > 0).length;
+  const orderedOnLatestDay = rows.filter((r) => r.ordersOnLatestDay > 0).length;
+
+  // §9.2 — never substitute zero for missing. Compliance is measurable only if
+  // the window's last day carries order data at all; if the feed has nothing
+  // for that day, "no store ordered" and "we cannot tell" are different facts
+  // and only one of them is a business collapse.
+  const rowsOnLatestDay = orders.rows.filter((o) => o.orderDate === w.end).length;
+  const complianceReason = `No order rows for ${w.end}, the last day of this window — daily compliance is not measurable for this range.`;
   const meta = { state: worstState(stores.state, orders.state), fetchedAt: orders.fetchedAt };
 
   const kpis: MetricValue[] = [
@@ -356,7 +374,11 @@ export async function storesModule(w: DateWindow = trailingWindow(28)): Promise<
       ...meta,
       sourceOverride: `${stores.source} ÷ ${t.total_trends_stores} Trends stores`,
     }),
-    metricValue('daily_order_compliance', active === 0 ? null : orderedToday / active, { ...meta }),
+    metricValue(
+      'daily_order_compliance',
+      presence(active === 0 ? null : orderedOnLatestDay / active, rowsOnLatestDay > 0, complianceReason),
+      { ...meta },
+    ),
     metricValue('stores_dark', dark, { ...meta }),
     metricValue(
       'orders_per_active_store',
@@ -422,6 +444,8 @@ export interface CatalogueData {
   storeCoverage: Array<{ storeId: string; coverage: number | null; scans: number; failed: number }>;
   auditedCoverage: number | null;
   reportGeneratedToday: boolean | null;
+  /** §6.3 — why the headline count and the breakdowns differ. */
+  gapReconciliation: GapReconciliation;
 }
 
 export async function catalogueModule(
@@ -449,6 +473,7 @@ export async function catalogueModule(
   // reads as good news when it is really no news.
   const latestDay = w.end;
   const newToday = gaps.rows.filter((g) => g.firstSeen === latestDay).length;
+  const scansOnLatestDay = scans.rows.filter((r) => r.dateKey === latestDay).length;
   const resolved7d = gaps.rows.filter(
     (g) => g.status === 'resolved' && g.lastSeen >= addDays(latestDay, -7),
   ).length;
@@ -503,7 +528,13 @@ export async function catalogueModule(
       sourceOverride: 'fact_store_visit_audit — 4 store visits, Jul 2026',
     }),
     metricValue('missing_distinct', cov.uniqueFailed, { ...meta }),
-    metricValue('missing_new', newToday, { ...meta }),
+    // Counted against the window's last day, and reported as unmeasurable when
+    // that day has no scan data at all rather than as a reassuring zero.
+    metricValue(
+      'missing_new',
+      presence(newToday, scansOnLatestDay > 0, `No scan data for ${latestDay}, the last day of this window — new missing EANs are not measurable.`),
+      { ...meta },
+    ),
     metricValue('missing_resolved', resolved7d, { ...meta }),
     metricValue('missing_age_p50', medianAge, { ...meta }),
     // §16.5.1 — junk in the `ean` param inflates the missing register and drags
@@ -535,6 +566,14 @@ export async function catalogueModule(
     }),
   ];
 
+  // §6.3 — the reason breakdown and the aging histogram below both count open
+  // gaps, while `missing_distinct` counts every EAN the scan feed observed
+  // failing. Both are right; the page has to say so.
+  const gapReconciliation = reconcileGapRegister({
+    observedDistinctMissing: cov.uniqueFailed,
+    gaps: gaps.rows,
+  });
+
   const reasonCounts = new Map<string, { direction: string | null; count: number }>();
   for (const g of openGaps) {
     const cur = reasonCounts.get(g.suspectedReason) ?? { direction: g.reasonDirection, count: 0 };
@@ -554,9 +593,20 @@ export async function catalogueModule(
       storeCoverage,
       auditedCoverage,
       reportGeneratedToday: todayRow?.reportGenerated ?? null,
+      gapReconciliation,
     },
     window: w,
-    warnings: [...daily.warnings, ...scans.warnings],
+    warnings: [
+      ...daily.warnings,
+      ...scans.warnings,
+      // Only surfaced when the split is a real hole, not when it is the
+      // expected open/closed partition.
+      ...(gapReconciliation.reconciled
+        ? []
+        : [
+            `${gapReconciliation.unregistered} EANs failed a scan but have no row in the gap register — they are unowned and will never be closed.`,
+          ]),
+    ],
     state: worstState(daily.state, scans.state),
     sources: [daily.source, scans.source],
   };

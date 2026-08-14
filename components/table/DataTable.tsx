@@ -16,6 +16,29 @@ export interface Column<T> {
   title?: string;
 }
 
+/**
+ * How a capped table declares what it is hiding.
+ *
+ * Passing a pre-sliced array to `rows` is the bug this exists to prevent: the
+ * header then says "200 rows" while the underlying set has 272, and a reader
+ * who sums the revenue column gets a number that ties to nothing on the page.
+ * Hand `DataTable` the *whole* set plus this, and it does the slicing itself so
+ * N, M, the sort key and the residual are all derived from the same array.
+ */
+export interface Truncation<T> {
+  /** N — how many rows to render. */
+  limit: number;
+  /** The sort key in the reader's words: "e-GMV", "coverage, ascending". */
+  sortKey: string;
+  /** Plural noun for a row: "stores", "EANs". */
+  noun: string;
+  /**
+   * What the hidden rows are worth, rendered next to the count. Without this a
+   * reader knows rows are missing but not whether they matter.
+   */
+  residual?: (hidden: T[]) => string | null;
+}
+
 export function DataTable<T>({
   columns,
   rows,
@@ -25,6 +48,7 @@ export function DataTable<T>({
   maxHeight = 480,
   rowKey,
   className,
+  truncation,
 }: {
   columns: Column<T>[];
   rows: T[];
@@ -34,17 +58,34 @@ export function DataTable<T>({
   maxHeight?: number;
   rowKey: (row: T, i: number) => string;
   className?: string;
+  truncation?: Truncation<T>;
 }) {
+  const total = rows.length;
+  const visible = truncation ? rows.slice(0, truncation.limit) : rows;
+  const hidden = truncation ? rows.slice(truncation.limit) : [];
+  const residual = truncation?.residual && hidden.length > 0 ? truncation.residual(hidden) : null;
+
   return (
     // min-w-0 is load-bearing: this is usually a grid or flex item, and those
     // default to `min-width: auto`, so the item sizes to the table's intrinsic
     // width and drags the page past the viewport. The child's `overflow-auto`
     // cannot rescue it, because by then the parent is already too wide.
-    <div className={cn('min-w-0 rounded border border-[var(--color-edge)] bg-[var(--surface)]', className)}>
+    <div
+      // The rendered and underlying counts are published on the element so the
+      // truncation contract is checkable from outside — a header that claims
+      // "top 200 of 272" while rendering 272 rows is the failure this catches.
+      data-rows-shown={visible.length}
+      data-rows-total={total}
+      className={cn('min-w-0 rounded border border-[var(--color-edge)] bg-[var(--surface)]', className)}
+    >
       {caption && (
         <div className="flex items-baseline justify-between gap-3 border-b border-[var(--color-edge)] px-3 py-2">
           <span className="label">{caption}</span>
-          <span className="num text-2xs text-[var(--text-muted)]">{rows.length} rows</span>
+          <span className="num text-2xs text-[var(--text-muted)]">
+            {hidden.length > 0
+              ? `Top ${visible.length} of ${total} by ${truncation!.sortKey}`
+              : `${total} rows`}
+          </span>
         </div>
       )}
       {/* tabIndex makes the scroll container reachable by keyboard. Without it
@@ -76,14 +117,14 @@ export function DataTable<T>({
             </tr>
           </thead>
           <tbody>
-            {rows.length === 0 ? (
+            {visible.length === 0 ? (
               <tr>
                 <td colSpan={columns.length} className="px-3 py-6 text-center text-[var(--text-muted)]">
                   {emptyMessage}
                 </td>
               </tr>
             ) : (
-              rows.map((row, i) => (
+              visible.map((row, i) => (
                 <tr
                   key={rowKey(row, i)}
                   className="border-b border-[var(--color-edge)]/50 last:border-0 hover:bg-[var(--color-ink)]/40"
@@ -106,6 +147,23 @@ export function DataTable<T>({
           </tbody>
         </table>
       </div>
+      {hidden.length > 0 && (
+        // Sits directly under the last visible row, where someone who has just
+        // scrolled to the bottom and started adding up a column will hit it.
+        <div
+          data-truncation-residual
+          className="border-t border-[var(--color-edge)] bg-[var(--color-ink)]/40 px-3 py-1.5 text-2xs text-[var(--text-muted)]"
+        >
+          <span className="num">+{hidden.length.toLocaleString('en-IN')}</span> {truncation!.noun} not
+          shown
+          {residual && (
+            <>
+              {' · '}
+              <span className="num">{residual}</span>
+            </>
+          )}
+        </div>
+      )}
       {sourceNote && (
         <div className="border-t border-[var(--color-edge)] px-3 py-1.5 text-2xs text-[var(--text-muted)]">
           Source: {sourceNote}

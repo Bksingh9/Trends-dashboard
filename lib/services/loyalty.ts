@@ -7,7 +7,7 @@
  * meaningless until the customer-id join is verified under §27.4.
  */
 import { config } from '@/lib/config';
-import { aggregateLoyalty, bqLoyalty, type LoyaltyDailyRow } from '@/lib/connectors/bq-loyalty';
+import { aggregateLoyalty, bqLoyalty } from '@/lib/connectors/bq-loyalty';
 import { metricValue, ppDelta, ratio, relativeDelta, type MetricValue } from '@/lib/metrics/compute';
 import { previousPeriod, trailingWindow, type DateWindow } from '@/lib/format/dates';
 import type { DataSourceState } from '@/lib/connectors/types';

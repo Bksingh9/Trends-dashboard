@@ -12,6 +12,11 @@ export default async function SalesPage() {
   const mod = await salesModule(trailingWindow(90));
   const { daily, waterfall, valueHistogram, storeMatrix, stateMatrix, newVsRepeat } = mod.data;
 
+  // Every breakdown on this page is confirmed-only, so the count they tie to is
+  // named on each of them rather than left for the reader to infer from the two
+  // order cards in the strip above.
+  const confirmedOrders = mod.kpis.find((k) => k.id === 'orders_confirmed')?.value ?? null;
+
   const storeCols: Column<(typeof storeMatrix)[number]>[] = [
     { key: 'code', header: 'Store code', numeric: true, render: (r) => r.storeCode },
     { key: 'name', header: 'Store', render: (r) => r.storeName },
@@ -103,9 +108,13 @@ export default async function SalesPage() {
         </figure>
 
         <figure className="rounded border border-[var(--color-edge)] bg-[var(--surface)] p-4">
-          <figcaption className="label mb-1">Order value distribution</figcaption>
+          <figcaption className="label mb-1">
+            Order value distribution — {formatCount(confirmedOrders)} confirmed orders
+          </figcaption>
           <p className="mb-3 text-2xs text-[var(--text-muted)]">
-            The ₹0 and outlier buckets are a real data-quality tell — watch them.
+            The ₹0 and outlier buckets are a real data-quality tell — watch them. Bins sum to the
+            Confirmed orders card, not to Orders — the §15.4 status enum is still unresolved, so both
+            are shown and neither is folded into the other.
           </p>
           <ul className="space-y-1.5">
             {valueHistogram.map((b) => {
@@ -152,18 +161,27 @@ export default async function SalesPage() {
 
       <div className="grid gap-4 xl:grid-cols-2">
         <DataTable
-          caption="State × revenue"
+          caption={`State × revenue — ${formatCount(confirmedOrders)} confirmed orders`}
           columns={stateCols}
           rows={stateMatrix}
           rowKey={(r) => r.state}
-          sourceNote="fact_orders × dim_store.state"
+          sourceNote="fact_orders × dim_store.state — confirmed orders only"
         />
         <DataTable
-          caption="Store × revenue"
+          caption={`Store × revenue — ${formatCount(confirmedOrders)} confirmed orders`}
           columns={storeCols}
-          rows={storeMatrix.slice(0, 200)}
+          rows={storeMatrix}
           rowKey={(r) => r.storeId}
-          sourceNote="fact_orders × dim_store — top 200 by revenue"
+          sourceNote="fact_orders × dim_store — confirmed orders only, ties to the Confirmed orders card"
+          truncation={{
+            limit: 200,
+            sortKey: 'net revenue',
+            noun: 'stores',
+            residual: (hidden) =>
+              `${formatINR(hidden.reduce((a, r) => a + r.revenue, 0))} · ${formatCount(
+                hidden.reduce((a, r) => a + r.orders, 0),
+              )} orders`,
+          }}
         />
       </div>
     </div>

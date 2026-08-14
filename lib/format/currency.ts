@@ -56,9 +56,18 @@ function trim(n: number, precision: number): string {
     .replace(/(\.\d*?)0+$/, '$1');
 }
 
-/** Plain integers with Indian grouping — orders, scans, EAN counts. */
+/**
+ * Plain integers with Indian grouping — orders, scans, EAN counts.
+ *
+ * Small non-integers keep their decimals. Some `count` metrics are really rates
+ * ("orders per active store per day" runs at 0.24), and rounding those to the
+ * nearest integer prints a real measured value as 0 — which is precisely the
+ * reading this dashboard is built to make impossible.
+ */
 export function formatCount(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return '—';
+  if (value !== 0 && Math.abs(value) < 1) return value.toFixed(2);
+  if (!Number.isInteger(value) && Math.abs(value) < 100) return value.toFixed(1);
   return groupIndian(Math.round(value)).replace(/\.00$/, '');
 }
 

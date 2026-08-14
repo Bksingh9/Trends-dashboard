@@ -149,6 +149,18 @@ export function AskTheData() {
               ))}
             </tbody>
           </table>
+          {result.rows.length > 100 && (
+            // The SQL guard already caps the result set; this cap is the render
+            // on top of it, and without saying so the footer's row count and
+            // the rows on screen disagree by a factor of anything.
+            <div
+              data-truncation-residual
+              className="border-t border-[var(--color-edge)] bg-[var(--color-ink)]/40 px-2 py-1 text-2xs text-[var(--text-muted)]"
+            >
+              <span className="num">+{result.rows.length - 100}</span> rows not shown — first 100 of{' '}
+              <span className="num">{result.rows.length}</span> in the order the query returned them
+            </div>
+          )}
           <div className="border-t border-[var(--color-edge)] px-2 py-1 text-2xs text-[var(--text-muted)]">
             {result.rowCount} rows · logged to ai_insight with the question, SQL and user
           </div>

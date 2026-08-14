@@ -12,6 +12,7 @@
  */
 import type { Assertion, AssertionContext, AssertionVerdict } from '@/lib/connectors/types';
 import { minutesSince } from '@/lib/format/dates';
+import { reconcileGapRegister } from '@/lib/metrics/reconcile';
 
 /** Reads a named column off a row without requiring an index signature. */
 const col = (row: unknown, name: string): unknown => (row as Record<string, unknown>)[name];
@@ -306,6 +307,43 @@ export function scanHygiene<T>(opts: {
       if (rate > opts.failAbove) return { id: 'scan_hygiene', level: 'fail', message: msg, observed: rate };
       if (rate > opts.warnAbove) return { id: 'scan_hygiene', level: 'warn', message: msg, observed: rate };
       return pass('scan_hygiene', `Rejection rate ${(rate * 100).toFixed(1)}%`, rate);
+    },
+  };
+}
+
+/**
+ * §6.3 — the gap register must account for every EAN the scan feed saw fail.
+ *
+ * The headline `missing_distinct` card and the reason/aging breakdowns count
+ * different populations by design (all observed vs still open), and the page
+ * discloses that split. This assertion guards the part that is *not* by design:
+ * an EAN that failed a scan and never got a register row is a gap with no
+ * owner, no reason and no aging clock, and it will sit there indefinitely.
+ */
+export function gapRegisterCoverage<T extends { status: string }>(opts: {
+  observedDistinctMissing: (rows: T[], ctx: AssertionContext) => number;
+  /** Rows unregistered before this trips. Small drift is a join-timing artefact. */
+  tolerance?: number;
+  level?: 'warn' | 'fail';
+}): Assertion<T> {
+  const level = opts.level ?? 'fail';
+  const tolerance = opts.tolerance ?? 0;
+  return {
+    id: 'gap_register_coverage',
+    level,
+    run(rows, ctx) {
+      const observed = opts.observedDistinctMissing(rows, ctx);
+      const rec = reconcileGapRegister({ observedDistinctMissing: observed, gaps: rows });
+      if (rec.unregistered > tolerance) {
+        return {
+          id: 'gap_register_coverage',
+          level,
+          message: `${rec.unregistered} EANs failed a scan but have no gap-register row — unowned and unaging (${rec.line})`,
+          observed: rec.registered,
+          expected: observed,
+        };
+      }
+      return pass('gap_register_coverage', `Register accounts for all observed misses — ${rec.line}`, rec.registered);
     },
   };
 }
