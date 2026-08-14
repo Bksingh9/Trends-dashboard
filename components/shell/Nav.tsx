@@ -16,6 +16,8 @@ export interface NavItem {
   label: string;
   hint: string;
   group: 'domains' | 'intelligence' | 'system';
+  /** Hidden unless the named module flag is on. */
+  flag?: 'loyalty';
 }
 
 export const NAV: NavItem[] = [
@@ -26,6 +28,8 @@ export const NAV: NavItem[] = [
   { href: '/catalogue', label: 'Catalogue', hint: 'Coverage, missing EANs', group: 'domains' },
   { href: '/app-health', label: 'App Health', hint: 'Crashes, latency, payments', group: 'domains' },
   { href: '/issues', label: 'Issues', hint: 'P0/P1, escalations', group: 'domains' },
+  // ADR-001 — rendered only when MODULE_LOYALTY is on, since §0 excludes it.
+  { href: '/loyalty', label: 'Loyalty', hint: 'Reliance One 2.0', group: 'domains', flag: 'loyalty' },
   { href: '/insights', label: 'AI Insights', hint: 'Brief, anomalies, ask the data', group: 'intelligence' },
   { href: '/connectors', label: 'Connectors', hint: 'Status, lineage, run log', group: 'system' },
   { href: '/reference', label: 'Reference', hint: 'Deep links, test EANs, docs', group: 'system' },
@@ -38,7 +42,7 @@ const GROUP_LABEL: Record<NavItem['group'], string> = {
   system: 'System',
 };
 
-export function Nav() {
+export function Nav({ enabledFlags = [] }: { enabledFlags?: string[] } = {}) {
   const pathname = usePathname();
   const groups: NavItem['group'][] = ['domains', 'intelligence', 'system'];
 
@@ -48,7 +52,7 @@ export function Nav() {
         <div key={g}>
           <div className="label mb-1.5 px-2">{GROUP_LABEL[g]}</div>
           <ul className="space-y-0.5">
-            {NAV.filter((n) => n.group === g).map((item) => {
+            {NAV.filter((n) => n.group === g && (!n.flag || enabledFlags.includes(n.flag))).map((item) => {
               const active = item.href === '/' ? pathname === '/' : pathname.startsWith(item.href);
               return (
                 <li key={item.href}>

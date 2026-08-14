@@ -20,7 +20,8 @@
     "verify:browser": "tsx scripts/verify-browser.ts",
     "e2e": "playwright test",
     "e2e:a11y": "playwright test e2e/a11y.spec.ts",
-    "qa": "npm run lint && npm run typecheck && npm test && npm run build && npm run e2e"
+    "qa": "npm run lint && npm run typecheck && npm test && npm run build && npm run e2e",
+    "doctor": "tsx scripts/doctor.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.0",

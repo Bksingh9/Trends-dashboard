@@ -10,6 +10,7 @@ export const ROUTES = [
   { path: '/issues', title: 'Issues' },
   { path: '/insights', title: 'AI Insights' },
   { path: '/connectors', title: 'Connectors' },
+  { path: '/connectors/setup', title: 'Connection setup' },
   { path: '/reference', title: 'Reference' },
   { path: '/settings', title: 'Settings' },
 ] as const;

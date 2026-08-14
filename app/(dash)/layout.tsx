@@ -28,7 +28,7 @@ export default function DashLayout({ children }: { children: React.ReactNode }) 
           </Link>
 
           <div className="flex-1 overflow-y-auto">
-            <Nav />
+            <Nav enabledFlags={config.moduleLoyalty ? ['loyalty'] : []} />
           </div>
 
           {/* §0 — production only. Stated on every screen so nobody has to ask

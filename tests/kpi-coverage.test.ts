@@ -16,6 +16,7 @@ import {
   salesModule,
   storesModule,
 } from '@/lib/services/modules';
+import { loyaltyModule } from '@/lib/services/loyalty';
 import { trailingWindow } from '@/lib/format/dates';
 
 const modules = await Promise.all([
@@ -25,6 +26,8 @@ const modules = await Promise.all([
   catalogueModule(),
   appHealthModule(trailingWindow(28)),
   issuesModule(),
+  // ADR-001 — loyalty metrics must reach a surface like every other metric.
+  loyaltyModule(trailingWindow(28)),
 ]);
 
 const emitted = new Map(modules.flatMap((m) => m.kpis).map((k) => [k.id, k]));

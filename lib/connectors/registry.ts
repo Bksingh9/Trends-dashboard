@@ -26,6 +26,7 @@ import { gcpLogging } from './gcp-logging';
 import { slackAlerts } from './slack-alerts';
 import { amplitude } from './amplitude';
 import { testEanCanary } from './test-ean-canary';
+import { bqLoyalty } from './bq-loyalty';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /** Build order from §30. The order here is the order shown on `/connectors`. */
@@ -43,6 +44,8 @@ export const CONNECTORS: BaseConnector<any, any>[] = [
   slackAlerts,
   amplitude,
   testEanCanary,
+  // ADR-001 — a deliberate departure from §0, gated behind MODULE_LOYALTY.
+  bqLoyalty,
 ];
 /* eslint-enable @typescript-eslint/no-explicit-any */
 

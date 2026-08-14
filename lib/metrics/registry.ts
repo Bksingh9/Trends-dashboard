@@ -10,6 +10,7 @@
 
 export type MetricUnit = 'count' | 'inr' | 'ratio' | 'ms' | 'score' | 'days';
 export type MetricDomain =
+  | 'loyalty'
   | 'business'
   | 'journey'
   | 'stores'
@@ -646,6 +647,99 @@ export const METRICS = {
     grain: 'week',
     description: 'Above 1 means the backlog is growing.',
     cadence: '30 min',
+  },
+
+  /* ── Loyalty (ADR-001 — a deliberate departure from §0) ─────────────── */
+  //
+  // Every metric here is marked ambiguous on purpose. The spec records the
+  // Loyalty property id and nothing about its events, so the taxonomy behind
+  // these is a proposal until the §16.1 inventory query settles it. They are
+  // rendered with that caveat visible rather than as established fact, and
+  // they are deliberately kept out of the App Health Score, the hub health
+  // lights, and the AI brief's Companion context.
+  loyalty_members_active: {
+    id: 'loyalty_members_active',
+    label: 'Active loyalty members',
+    domain: 'loyalty',
+    unit: 'count',
+    direction: 'up_good',
+    formula: 'distinct users with any Reliance One event in window',
+    source: 'bq-loyalty — GA4 export in fynd-jio-impetus-prod',
+    grain: 'day',
+    description: 'Loyalty-side activity. A loyalty member is not the same population as a Companion user.',
+    cadence: 'Daily',
+    caveat: 'ADR-001 — the Loyalty event taxonomy is unverified; this is a proposal, not a settled figure.',
+    ambiguous: true,
+  },
+  loyalty_enrolments: {
+    id: 'loyalty_enrolments',
+    label: 'New enrolments',
+    domain: 'loyalty',
+    unit: 'count',
+    direction: 'up_good',
+    formula: 'count of enrolment events in window',
+    source: 'bq-loyalty',
+    grain: 'day',
+    description: 'New Reliance One 2.0 sign-ups.',
+    cadence: 'Daily',
+    caveat: 'ADR-001 — event name unconfirmed.',
+    ambiguous: true,
+  },
+  loyalty_links: {
+    id: 'loyalty_links',
+    label: 'Accounts linked',
+    domain: 'loyalty',
+    unit: 'count',
+    direction: 'up_good',
+    formula: 'count of account-link events in window',
+    source: 'bq-loyalty',
+    grain: 'day',
+    description: 'Existing accounts linked to the app.',
+    cadence: 'Daily',
+    caveat: 'ADR-001 — event name unconfirmed.',
+    ambiguous: true,
+  },
+  loyalty_points_earned: {
+    id: 'loyalty_points_earned',
+    label: 'Points earned',
+    domain: 'loyalty',
+    unit: 'count',
+    direction: 'up_good',
+    formula: 'sum of the points param on earn events',
+    source: 'bq-loyalty',
+    grain: 'day',
+    description: 'Points issued to members.',
+    cadence: 'Daily',
+    caveat: 'ADR-001 — the `points` parameter is assumed, not verified.',
+    ambiguous: true,
+  },
+  loyalty_points_redeemed: {
+    id: 'loyalty_points_redeemed',
+    label: 'Points redeemed',
+    domain: 'loyalty',
+    unit: 'count',
+    direction: 'up_good',
+    formula: 'sum of the points param on redeem events',
+    source: 'bq-loyalty',
+    grain: 'day',
+    description: 'Points spent by members.',
+    cadence: 'Daily',
+    caveat: 'ADR-001 — the `points` parameter is assumed, not verified.',
+    ambiguous: true,
+  },
+  loyalty_redemption_rate: {
+    id: 'loyalty_redemption_rate',
+    label: 'Redemption rate',
+    domain: 'loyalty',
+    unit: 'ratio',
+    direction: 'up_good',
+    formula: 'loyalty_points_redeemed / loyalty_points_earned',
+    source: 'derived',
+    grain: 'day',
+    description: 'What share of issued points members actually spend. Low redemption is a liability building up.',
+    cadence: 'Daily',
+    caveat: 'ADR-001 — derived from two unverified inputs.',
+    ambiguous: true,
   },
 } as const satisfies Record<string, MetricDef>;
 
