@@ -12,6 +12,13 @@ import { trailingWindow, addDays, todayIST } from '@/lib/format/dates';
 import type { MetricValue } from '@/lib/metrics/compute';
 import { detectAnomalies, type Anomaly, type MetricHistory } from '@/lib/ai/anomaly';
 import { evaluateRca, type RcaHit } from '@/lib/ai/rca';
+import {
+  concentration,
+  detectEntityAnomalies,
+  rollUpToStates,
+  type Concentration,
+  type EntityAnomaly,
+} from '@/lib/ai/entity-anomaly';
 import { buildInsightContext, type InsightContext } from '@/lib/ai/context';
 import {
   appHealthModule,
@@ -40,6 +47,9 @@ export interface HubData {
   headline: MetricValue[];
   scanStrip: Awaited<ReturnType<typeof getScanStrip>>;
   anomalies: Anomaly[];
+  /** Per-store and per-state outliers the global sweep cannot see. */
+  entityAnomalies: EntityAnomaly[];
+  concentration: Concentration;
   rca: RcaHit[];
   context: InsightContext;
   topRisks: Array<{ title: string; detail: string; href: string; severity: 'act' | 'watch' | 'info' }>;
@@ -175,12 +185,47 @@ export async function hubData(): Promise<HubData> {
     ],
   });
 
-  const storeCov = catalogue.data.storeCoverage;
-  const worstStores = storeCov.filter((s) => (s.coverage ?? 1) < 0.9);
+  // Per-store coverage as observations, weighted by scan volume so a store with
+  // four scans cannot masquerade as the worst in the estate.
+  const storeById = new Map(stores.data.rows.map((r) => [r.storeId, r]));
+  const storeObservations = catalogue.data.storeCoverage
+    .filter((s) => s.coverage != null)
+    .map((s) => ({
+      entityId: s.storeId,
+      entityLabel: storeById.get(s.storeId)?.storeName ?? s.storeId,
+      value: s.coverage as number,
+      weight: s.scans,
+      state: storeById.get(s.storeId)?.state ?? '',
+    }));
+
+  const storeAnomalies = detectEntityAnomalies(storeObservations, {
+    metricId: 'store_coverage',
+    metricLabel: 'Coverage',
+    entityType: 'store',
+    worseWhen: 'below',
+    unit: 'ratio',
+  });
+  const stateAnomalies = detectEntityAnomalies(rollUpToStates(storeObservations), {
+    metricId: 'store_coverage',
+    metricLabel: 'Coverage',
+    entityType: 'state',
+    worseWhen: 'below',
+    unit: 'ratio',
+    // A whole state being an outlier is rarer and more serious than one store.
+    zThreshold: 2,
+    minWeight: 200,
+  });
+  const entityAnomalies = [...stateAnomalies, ...storeAnomalies];
+
+  // This is what decides store_local vs upstream_ingestion, and therefore which
+  // team gets called. The previous "fewer than five stores below 90%" heuristic
+  // mistook a broad shallow decline for a narrow deep one.
+  const coverageConcentration = concentration(storeObservations, { worseWhen: 'below' });
+
   const rca = evaluateRca({
     anomalies,
     unhealthyConnectors: connectors.filter((c) => c.health === 'red').map((c) => c.id),
-    gapConcentratedInFewStores: worstStores.length > 0 && worstStores.length < 5,
+    gapConcentratedInFewStores: coverageConcentration.verdict === 'concentrated',
     funnelRatesFlat: anomalies.filter((a) => a.metricId.endsWith('_rate')).length === 0,
     recentRelease: appHealth.data.releases.at(-1)
       ? { version: appHealth.data.releases.at(-1)!.label, dateCreated: appHealth.data.releases.at(-1)!.dateKey }
@@ -211,14 +256,16 @@ export async function hubData(): Promise<HubData> {
       active: (activeStores?.value ?? 0) as number,
       dark7d: (dark?.value ?? 0) as number,
       compliancePct: (compliance?.value ?? 0) as number,
-      topDeclining: stores.data.darkWorklist
-        .slice(0, 5)
-        .map((s) => ({ storeCode: s.storeCode, deltaPct: -1 })),
-      topDecliningStates: stores.data.states
-        .slice()
-        .sort((a, b) => a.storesActive / Math.max(1, a.storesLive) - b.storesActive / Math.max(1, b.storesLive))
-        .slice(0, 5)
-        .map((s) => ({ state: s.state, deltaPct: s.storesDark / Math.max(1, s.storesLive) })),
+      // Real outliers rather than placeholders: the deltaPct is how far below
+      // the cohort median the entity actually sits.
+      topDeclining: storeAnomalies.slice(0, 5).map((a) => ({
+        storeCode: storeById.get(a.entityId)?.storeCode ?? a.entityId,
+        deltaPct: Number((a.value - a.cohortMedian).toFixed(4)),
+      })),
+      topDecliningStates: stateAnomalies.slice(0, 5).map((a) => ({
+        state: a.entityLabel,
+        deltaPct: Number((a.value - a.cohortMedian).toFixed(4)),
+      })),
     },
     connectorHealth: connectors.map((c) => ({
       id: c.id,
@@ -266,6 +313,8 @@ export async function hubData(): Promise<HubData> {
     headline,
     scanStrip: strip,
     anomalies,
+    entityAnomalies,
+    concentration: coverageConcentration,
     rca,
     context,
     topRisks,

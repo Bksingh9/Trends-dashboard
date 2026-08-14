@@ -335,3 +335,120 @@ describe('§28.6 SQL guard', () => {
     expect(g.sql).not.toMatch(/```/);
   });
 });
+
+describe('per-store and per-state sweep — what the global detector cannot see', () => {
+  const cohort = (n: number, value: number, weight = 500) =>
+    Array.from({ length: n }, (_, i) => ({
+      entityId: `s${i}`,
+      entityLabel: `Store ${i}`,
+      value,
+      weight,
+      state: i < n / 2 ? 'Maharashtra' : 'Delhi',
+    }));
+
+  it('finds one broken store that 270 healthy ones would drown', async () => {
+    const { detectEntityAnomalies } = await import('@/lib/ai/entity-anomaly');
+    const stores = [
+      ...cohort(40, 0.94),
+      { entityId: 'broken', entityLabel: 'Trends, Broken Mall', value: 0.42, weight: 800, state: 'Delhi' },
+    ];
+    const found = detectEntityAnomalies(stores, {
+      metricId: 'store_coverage', metricLabel: 'Coverage', entityType: 'store',
+      worseWhen: 'below', unit: 'ratio',
+    });
+    expect(found[0].entityId).toBe('broken');
+    expect(found[0].severity).toBe('act');
+    // The global mean barely moves — 40 stores at 94% and one at 42% averages
+    // to 92.7%, which no history-based z-score would flag.
+    const mean = stores.reduce((a, s) => a + s.value, 0) / stores.length;
+    expect(mean).toBeGreaterThan(0.92);
+  });
+
+  it('ignores a low-volume store whose percentage is statistically meaningless', async () => {
+    const { detectEntityAnomalies } = await import('@/lib/ai/entity-anomaly');
+    const found = detectEntityAnomalies(
+      [...cohort(40, 0.94), { entityId: 'tiny', entityLabel: 'Tiny', value: 0.25, weight: 4, state: 'Delhi' }],
+      { metricId: 'store_coverage', metricLabel: 'Coverage', entityType: 'store', worseWhen: 'below', unit: 'ratio' },
+    );
+    // 1 of 4 scans failing is not a finding; letting it rank would push real
+    // breakages off the top of the list.
+    expect(found.map((f) => f.entityId)).not.toContain('tiny');
+  });
+
+  it('refuses to call a cohort of fewer than eight entities', async () => {
+    const { detectEntityAnomalies } = await import('@/lib/ai/entity-anomaly');
+    expect(
+      detectEntityAnomalies([...cohort(5, 0.94), { entityId: 'x', entityLabel: 'X', value: 0.2, weight: 500, state: 'D' }], {
+        metricId: 'store_coverage', metricLabel: 'Coverage', entityType: 'store', worseWhen: 'below', unit: 'ratio',
+      }),
+    ).toEqual([]);
+  });
+
+  it('calls a few deep failures concentrated, sending it to store_local', async () => {
+    const { concentration } = await import('@/lib/ai/entity-anomaly');
+    const c = concentration(
+      [...cohort(40, 0.95), ...Array.from({ length: 3 }, (_, i) => ({
+        entityId: `bad${i}`, entityLabel: `Bad ${i}`, value: 0.3, weight: 900, state: 'Delhi',
+      }))],
+      { worseWhen: 'below' },
+    );
+    expect(c.verdict).toBe('concentrated');
+    expect(c.explanation).toMatch(/store-local or regional/);
+  });
+
+  it('calls a broad shallow decline systemic, sending it upstream', async () => {
+    const { concentration } = await import('@/lib/ai/entity-anomaly');
+    // Every store down a little is an ingestion problem, not 40 store problems.
+    const spread = Array.from({ length: 40 }, (_, i) => ({
+      entityId: `s${i}`, entityLabel: `Store ${i}`, value: 0.95 - (i % 20) * 0.012, weight: 500, state: 'MH',
+    }));
+    const c = concentration(spread, { worseWhen: 'below' });
+    expect(c.verdict).toBe('systemic');
+    expect(c.explanation).toMatch(/upstream/);
+  });
+
+  it('rolls stores up to states weighted by volume, not by store count', async () => {
+    const { rollUpToStates } = await import('@/lib/ai/entity-anomaly');
+    const states = rollUpToStates([
+      { entityId: 'a', entityLabel: 'A', value: 0.5, weight: 1000, state: 'Delhi' },
+      { entityId: 'b', entityLabel: 'B', value: 1.0, weight: 10, state: 'Delhi' },
+    ]);
+    const delhi = states.find((s) => s.entityId === 'Delhi')!;
+    // An unweighted mean would say 75%; the state is really running at ~50%.
+    expect(delhi.value).toBeLessThan(0.52);
+    expect(delhi.weight).toBe(1010);
+  });
+});
+
+describe('a cohort with zero spread must not silence the sweep', () => {
+  it('flags an outlier even when every peer is identical (MAD = 0)', async () => {
+    const { detectEntityAnomalies } = await import('@/lib/ai/entity-anomaly');
+    // robustZ returns ±Infinity here. Treating that as "unmeasurable" would
+    // discard the clearest signal the sweep can produce.
+    const found = detectEntityAnomalies(
+      [
+        ...Array.from({ length: 20 }, (_, i) => ({
+          entityId: `s${i}`, entityLabel: `Store ${i}`, value: 0.94, weight: 500,
+        })),
+        { entityId: 'broken', entityLabel: 'Broken', value: 0.42, weight: 500 },
+      ],
+      { metricId: 'store_coverage', metricLabel: 'Coverage', entityType: 'store', worseWhen: 'below', unit: 'ratio' },
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0].entityId).toBe('broken');
+    expect(found[0].severity).toBe('act');
+    // Finite so it sorts, formats and bands like any other score.
+    expect(Number.isFinite(found[0].zScore)).toBe(true);
+  });
+
+  it('does not flag entities sitting exactly at a zero-spread median', async () => {
+    const { detectEntityAnomalies } = await import('@/lib/ai/entity-anomaly');
+    const found = detectEntityAnomalies(
+      Array.from({ length: 20 }, (_, i) => ({
+        entityId: `s${i}`, entityLabel: `Store ${i}`, value: 0.94, weight: 500,
+      })),
+      { metricId: 'store_coverage', metricLabel: 'Coverage', entityType: 'store', worseWhen: 'below', unit: 'ratio' },
+    );
+    expect(found).toEqual([]);
+  });
+});

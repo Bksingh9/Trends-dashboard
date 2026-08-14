@@ -88,6 +88,66 @@ export default async function InsightsPage() {
       </section>
 
       <section className="rounded border border-[var(--color-edge)] bg-[var(--surface)] p-4">
+        <h2 className="label mb-1">Where it is concentrated</h2>
+        <p className="mb-3 text-2xs text-[var(--text-muted)]">
+          The global sweep compares a metric against its own history, so 270 healthy stores drown
+          one broken one — coverage slips 0.2pp and nothing trips. This compares each store and
+          state against <em>its cohort</em> instead, which is what finds the store that is broken
+          right now regardless of what it did last week.
+        </p>
+
+        <div
+          className={cn(
+            'mb-4 rounded border px-3 py-2 text-xs',
+            hub.concentration.verdict === 'concentrated'
+              ? 'border-[var(--color-warn)]/50 bg-[var(--color-warn)]/5'
+              : 'border-[var(--color-edge)]',
+          )}
+        >
+          <span className="uppercase tracking-wider text-[var(--text-muted)]">
+            {hub.concentration.verdict.replace('_', ' ')}
+          </span>{' '}
+          <span>{hub.concentration.explanation}</span>
+        </div>
+
+        {hub.entityAnomalies.length === 0 ? (
+          <p className="text-sm text-[var(--text-muted)]">
+            No store or state is a significant outlier against its cohort.
+          </p>
+        ) : (
+          <ul className="space-y-1.5">
+            {hub.entityAnomalies.slice(0, 12).map((a) => (
+              <li
+                key={`${a.entityType}-${a.entityId}`}
+                className="grid grid-cols-[4rem_1fr_5rem_4rem] items-baseline gap-3 text-xs"
+              >
+                <span className="text-2xs uppercase tracking-wider text-[var(--text-muted)]">
+                  {a.entityType}
+                </span>
+                <span className="truncate" title={a.entityLabel}>
+                  {a.entityLabel}
+                </span>
+                <span className="num text-right text-[var(--color-warn)]">
+                  {(a.value * 100).toFixed(1)}%
+                </span>
+                <span
+                  className="num text-right text-2xs text-[var(--text-muted)]"
+                  title={`Robust z against the cohort median of ${(a.cohortMedian * 100).toFixed(1)}%`}
+                >
+                  z {a.zScore.toFixed(1)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="mt-3 text-2xs text-[var(--text-muted)]">
+          Source: fact_scan_daily grouped by store and state · entities below 30 scans are excluded,
+          because a 40% coverage on four scans is noise that would push genuinely broken stores off
+          the list
+        </p>
+      </section>
+
+      <section className="rounded border border-[var(--color-edge)] bg-[var(--surface)] p-4">
         <h2 className="label mb-1">Root-cause hints</h2>
         <p className="mb-3 text-2xs text-[var(--text-muted)]">
           Rule-driven candidates. <code className="num">pipeline_not_business</code> is always checked
