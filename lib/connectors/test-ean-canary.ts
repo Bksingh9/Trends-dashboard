@@ -13,6 +13,7 @@ import { TEST_EANS } from '@/fixtures/baselines';
 import { fixtureScanRows } from '@/fixtures/catalogue';
 import { trailingWindow, type DateWindow } from '@/lib/format/dates';
 import { rowVolume } from '@/lib/assertions';
+import { getDb } from '@/lib/db/client';
 import { BaseConnector } from './base';
 import type { Assertion, CostTier, LoadResult } from './types';
 
@@ -37,11 +38,18 @@ export class TestEanCanaryConnector extends BaseConnector<CanaryRow, CanaryRow> 
   readonly costTier: CostTier = 'free';
   readonly priority = 'P1' as const;
   readonly powers = ['/reference test EAN registry', 'early catalogue-break detection'];
-  readonly blockedBy = undefined; // depends only on bq-ga4-events having landed
+  readonly blockedBy = 'DATABASE_URL — this connector needs no credentials, only the scan mart';
 
   isConfigured(): boolean {
-    // Postgres-only: configured whenever the scan mart is reachable.
-    return false; // Phase 0 — flips to true once fact_scan_daily is populated
+    // Postgres-only. It needs no API key and no service account, so the single
+    // thing that can block it is having nowhere to read from.
+    //
+    // Deliberately not "…and fact_scan_daily has rows": an empty mart is a
+    // finding, not a configuration problem, and hiding it behind `configured:
+    // false` would turn "the scan feed has stopped" into "this connector is not
+    // set up" — the wrong diagnosis, pointing at the wrong team. The `rowVolume`
+    // assertion is what reports the empty case, and it reports it as a failure.
+    return getDb() != null;
   }
 
   protected async extract(w: DateWindow): Promise<CanaryRow[]> {

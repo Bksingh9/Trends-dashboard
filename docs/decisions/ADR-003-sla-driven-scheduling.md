@@ -197,3 +197,84 @@ It does **not** prove any connector can talk to its real upstream. That still
 needs credentials. What it does mean is that when a credential arrives, the only
 untested step left is `extract` — and the connection doctor is built to prove
 exactly that hop.
+
+---
+
+## Addendum 2 — two marts nobody was filling (2026-08-14)
+
+Seeding a real database exposed a larger gap than the load path itself.
+
+`fact_scan_daily` and `fact_catalogue_gap` were **read by the serving layer and
+written by no connector at all.** Between them they carry unique and total
+coverage (§5.3), the Scan Strip, store × coverage, the missing-EAN register, the
+gap reasons, the aging histogram, the §6.3 reconciliation, and the test-EAN
+canary — most of `/catalogue`, and the §18.7 baseline this whole build is
+measured against.
+
+With a database configured, every one of those would have queried an empty
+table, hit the "mart is empty" branch, and silently fallen back to fixtures.
+Forever. Nothing would have gone red.
+
+It stayed hidden because **every individual piece was correct.** `SCAN_SQL` was
+written. `partitionScanRows` was written and tested. `classifyGap` was written
+and tested. The tables existed in the schema. The assertions existed. Only the
+wiring across the seam was missing, and nothing — not the types, not the tests,
+not the connector board — looked across that seam. It was invisible in exactly
+the way the `avis_base_view` staleness was invisible.
+
+### `bq-ga4-scans`
+
+The scan half of the GA4 export, separated from `bq-ga4-events` because the
+lifecycle is one row type per connector and these are genuinely different
+grains: a funnel step keyed by step name, a scan keyed by EAN and result.
+Sharing one class would mean a union type and a `load()` that branches on which
+half it was handed — which is how rows end up in the wrong table.
+
+### `catalogue-gap-register`
+
+A *derivation*, not an extraction: it joins `fact_scan_daily` against
+`dim_product` inside Postgres and classifies each failure per §20.3. Like
+`test-ean-canary` it needs no credential of its own, so it is the second
+connector that runs genuinely live today.
+
+Two things it deliberately does not re-derive:
+
+- **`status` and `owner`.** A human who assigns an owner or writes a note is
+  recording something the pipeline cannot reconstruct, and a nightly run that
+  cleared it would make the register useless as a worklist — the one thing it
+  is for. They are absent from the upsert's `set` clause.
+- **`firstSeen`, when an earlier one exists.** The aging clock is the point
+  (§4.5: "a miss that is 30 days old is an ownership failure, not a data
+  issue"), and recomputing it from a 3-day window would reset every gap's age
+  to zero every night. Its re-run window is 30 days for the same reason.
+
+### What it reproduces
+
+Run against the seeded scan mart, the register derives **2,510 rows** — the
+§18.7 baseline exactly — and the mart yields **93.97% unique coverage** against
+the documented 94.0%, both from real SQL rather than from a fixture constant.
+The reason mix lands on the §20.3 distribution (38% / 30% / 15% / 8%), which
+also proved that seeding the product master over one day made every gap outside
+that day classify as `absent_from_master` — a fixture artefact impersonating the
+single most serious catalogue finding there is. Seeding now uses one window for
+everything.
+
+### `test-ean-canary` was switched off in code
+
+`isConfigured()` returned a hardcoded `false` with a comment saying it would
+"flip to true once fact_scan_daily is populated" — a flip nobody had written.
+It needs no credential; it reads Postgres. It now checks for a database, and
+deliberately does *not* also require rows in `fact_scan_daily`: an empty mart is
+a finding, and hiding it behind `configured: false` would turn "the scan feed
+has stopped" into "this connector is not set up" — the wrong diagnosis, pointing
+at the wrong team. The `rowVolume` assertion reports the empty case, as a
+failure.
+
+### The test that would have caught it
+
+`tests/connectors-live.test.ts` now parses the tables the repository reads and
+the tables the connectors write, and fails on any read-but-unwritten mart. It
+was verified by breaking `bq-ga4-scans` and watching it fail. A companion test
+asserts every `tryLive` call names the connectors that keep its mart current —
+a call with no connector list always reports `live`, which is precisely the
+failure §14.5 exists to prevent.

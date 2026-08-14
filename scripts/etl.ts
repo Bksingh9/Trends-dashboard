@@ -19,7 +19,7 @@
  *   npm run etl:status                   # the board, as text
  */
 import { CONNECTORS, connectorStatuses, getConnector } from '../lib/connectors/registry';
-import { SNAPSHOT_CONNECTORS, tick, windowFor } from '../lib/connectors/scheduler';
+import { tick, windowFor } from '../lib/connectors/scheduler';
 import { recentRuns } from '../lib/connectors/run-log';
 import { getDb } from '../lib/db/client';
 import { addDays, daysBetween, trailingWindow } from '../lib/format/dates';
@@ -180,9 +180,12 @@ async function seed(): Promise<void> {
   for (const pass of once ? [1] : [1, 2]) {
     if (!once) console.log(c.dim(pass === 1 ? '  pass 1 — insert' : '\n  pass 2 — re-run, to prove the upsert is idempotent'));
     for (const connector of targets) {
-      // Snapshot connectors replace a whole dimension and ignore the window;
-      // widening it for them would just be misleading in the log.
-      const w = SNAPSHOT_CONNECTORS.has(connector.id) ? windowFor(connector.id) : trailingWindow(days);
+      // The wide window applies to snapshot connectors too. `bq-catalogue-master`
+      // derives its fixture from the scan rows, so seeding it over one day gives
+      // it one day's worth of EANs — and every gap outside that day then
+      // classifies as `absent_from_master`, which is a fixture artefact
+      // masquerading as the single most serious catalogue finding there is.
+      const w = trailingWindow(days);
       try {
         const r = await connector.seed(w);
         const prev = counts.get(connector.id);

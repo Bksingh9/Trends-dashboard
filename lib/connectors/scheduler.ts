@@ -37,6 +37,11 @@ import { lastRunFor, isRunning } from './run-log';
 export const WINDOW_DAYS: Record<string, number> = {
   'bq-orders': 2, // 60-min incremental covering today and yesterday (§15.7)
   'bq-ga4-events': 3, // GA4 finalises daily tables up to 48h late
+  'bq-ga4-scans': 3, // same export, same lateness
+  // Wider than its inputs on purpose: the register carries an aging clock, and
+  // a narrow window would drop any gap that happened not to be scanned in the
+  // last three days — which is exactly the 30-day-old miss it exists to surface.
+  'catalogue-gap-register': 30,
   'slack-catalogue-report': 3,
   'sheets-store-master': 1,
   'bq-catalogue-master': 1,

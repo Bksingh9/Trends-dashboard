@@ -275,10 +275,10 @@ export async function getScans(w: DateWindow): Promise<Sourced<ScanRow[]>> {
         sessionCount: r.sessionCount ?? 0,
       }));
     },
-    'fact_scan_daily (bq-ga4-events)',
+    'fact_scan_daily (bq-ga4-scans)',
     () => fixtureScanRows(w),
     'fixture: GA4 scan events',
-    ['bq-ga4-events'],
+    ['bq-ga4-scans'],
   );
 }
 
@@ -327,10 +327,13 @@ export async function getGaps(w: DateWindow): Promise<Sourced<GapRow[]>> {
         owner: r.owner,
       }));
     },
-    'fact_catalogue_gap',
+    'fact_catalogue_gap (catalogue-gap-register)',
     () => fixtureGaps(w),
     'fixture: missing-EAN register',
-    ['bq-ga4-events', 'bq-catalogue-master'],
+    // The register is derived, so its freshness is its own — but it is only as
+    // good as the two marts it joins, and naming all three means a stale scan
+    // feed is reported here rather than looking like a healthy register.
+    ['catalogue-gap-register', 'bq-ga4-scans', 'bq-catalogue-master'],
   );
 }
 

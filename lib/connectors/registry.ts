@@ -17,7 +17,9 @@ import { sheetsStoreMaster } from './sheets-store-master';
 import { slackCatalogueReport } from './slack-catalogue-report';
 import { bqOrders } from './bq-orders';
 import { bqGa4Events } from './bq-ga4-events';
+import { bqGa4Scans } from './bq-ga4-scans';
 import { bqCatalogueMaster } from './bq-catalogue-master';
+import { catalogueGapRegister } from './catalogue-gap-register';
 import { sentry } from './sentry';
 import { jira } from './jira';
 import { ga4Api } from './ga4-api';
@@ -35,7 +37,13 @@ export const CONNECTORS: BaseConnector<any, any>[] = [
   slackCatalogueReport,
   bqOrders,
   bqGa4Events,
+  // The scan half of the same GA4 export. Separate because the grain differs
+  // and one connector is one row type; sharing would mean a `load()` that
+  // branches on which half it was handed.
+  bqGa4Scans,
   bqCatalogueMaster,
+  // Derived in Postgres from the two above — no credential of its own.
+  catalogueGapRegister,
   sentry,
   jira,
   ga4Api,

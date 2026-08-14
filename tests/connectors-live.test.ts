@@ -314,3 +314,122 @@ describe('§27.5 — every connector can actually load', () => {
     expect(run?.status === 'success' || run?.status === 'warn').toBe(true);
   });
 });
+
+/* ── the last mile ───────────────────────────────────────────────────────── */
+
+describe('§13 — nothing is missing when a credential finally arrives', () => {
+  it('documents every environment variable the code reads', () => {
+    // A connector whose credential is documented nowhere is one nobody will
+    // ever configure — it just sits grey on /connectors forever, and the
+    // reason is invisible.
+    const { readFileSync, readdirSync } = require('node:fs') as typeof import('node:fs');
+    const { join } = require('node:path') as typeof import('node:path');
+
+    const documented = new Set(
+      (readFileSync('.env.example', 'utf8').match(/^#?\s*([A-Z][A-Z0-9_]{3,})=/gm) ?? []).map((l) =>
+        l.replace(/^#?\s*/, '').replace('=', ''),
+      ),
+    );
+
+    // Set by the runtime or by the test harness, not by whoever deploys this.
+    const ambient = new Set(['NODE_ENV', 'CHROMIUM_PATH', 'VERIFY_BASE_URL', 'VERIFY_OUT', 'E2E_PORT', 'E2E_BASE_URL', 'E2E_NO_SERVER', 'CI']);
+
+    const used = new Set<string>();
+    const walk = (dir: string) => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.tsx?$/.test(e.name)) {
+          for (const m of readFileSync(p, 'utf8').matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g)) {
+            used.add(m[1]);
+          }
+          // `config` reads them by name through a helper.
+          for (const m of readFileSync(p, 'utf8').matchAll(/\benv\('([A-Z][A-Z0-9_]*)'/g)) {
+            used.add(m[1]);
+          }
+        }
+      }
+    };
+    for (const root of ['lib', 'app', 'scripts']) walk(root);
+
+    const undocumented = [...used].filter((v) => !ambient.has(v) && !documented.has(v)).sort();
+    expect(undocumented, 'add these to .env.example').toEqual([]);
+  });
+
+  it('names a §13 blocker for every connector that is not configured', async () => {
+    // "Not configured" without "and here is what would configure it" leaves
+    // someone reading the board with no next step.
+    for (const c of CONNECTORS) {
+      if (c.isConfigured()) continue;
+      const d = c.descriptor();
+      expect(d.blockedBy, `${c.id} is unconfigured but names no blocker`).toBeTruthy();
+    }
+  });
+
+  it('declares what every connector powers, so the lineage cannot drift', () => {
+    for (const c of CONNECTORS) {
+      expect(c.descriptor().powers.length, `${c.id} declares no downstream`).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('§7 — every mart the serving layer reads has a connector that fills it', () => {
+  it('has no table that is read but written by nothing', () => {
+    // This is the test that would have caught the largest gap in the build:
+    // `fact_scan_daily` and `fact_catalogue_gap` were read by /catalogue,
+    // /stores, the Scan Strip and the test-EAN canary — and no connector wrote
+    // either one. With a database configured, all of them would have found an
+    // empty mart and silently fallen back to fixtures forever, including the
+    // §18.7 coverage baseline.
+    //
+    // It stayed hidden because every individual piece was correct: the SQL was
+    // written, the transform was written, the assertions were written, the
+    // table existed. Only the wiring between them was missing, and nothing in
+    // the type system or the tests looked across that seam.
+    const { readFileSync, readdirSync } = require('node:fs') as typeof import('node:fs');
+    const { join } = require('node:path') as typeof import('node:path');
+
+    const repo = readFileSync('lib/data/repository.ts', 'utf8');
+    const read = new Set(
+      [...repo.matchAll(/\.from\((fact|dim)([A-Za-z]+)\)/g)].map((m) => `${m[1]}${m[2]}`),
+    );
+
+    const written = new Set<string>();
+    for (const f of readdirSync('lib/connectors')) {
+      if (!f.endsWith('.ts')) continue;
+      const src = readFileSync(join('lib/connectors', f), 'utf8');
+      for (const m of src.matchAll(/\.insert\((fact|dim)([A-Za-z]+)\)/g)) {
+        written.add(`${m[1]}${m[2]}`);
+      }
+    }
+
+    expect(read.size, 'the repository parse found nothing — the regex has drifted').toBeGreaterThan(5);
+    const orphans = [...read].filter((t) => !written.has(t)).sort();
+    expect(orphans, 'these marts are read but no connector writes them').toEqual([]);
+  });
+
+  it('routes every mart read to the connectors that keep it current', () => {
+    // The freshness rule can only report a stale mart if it knows which
+    // connector owns it. A `tryLive` call with no connector ids always reads
+    // `live`, which is the exact failure §14.5 exists to prevent.
+    const { readFileSync } = require('node:fs') as typeof import('node:fs');
+    const repo = readFileSync('lib/data/repository.ts', 'utf8');
+
+    // Every tryLive call must pass a non-empty connector list.
+    const calls = repo.match(/return tryLive\(/g) ?? [];
+    const lists = repo.match(/\n\s*\['[a-z0-9-]+'(?:,\s*'[a-z0-9-]+')*\],\n\s*\);/g) ?? [];
+    expect(calls.length).toBeGreaterThan(5);
+    expect(lists.length, 'a tryLive call is missing its connector list').toBe(calls.length);
+
+    // …and every id named there is a connector that actually exists.
+    const known = new Set(CONNECTORS.map((c) => c.id));
+    for (const m of repo.matchAll(/'([a-z0-9]+(?:-[a-z0-9]+)+)'/g)) {
+      if (m[1].includes('-') && /^(bq|sheets|slack|jira|sentry|ga4|api|gcp|test|amplitude|catalogue)/.test(m[1])) {
+        // Only assert on strings that look like connector ids, not table names.
+        if (!m[1].includes('_')) {
+          expect(known.has(m[1]), `repository names unknown connector "${m[1]}"`).toBe(true);
+        }
+      }
+    }
+  });
+});
