@@ -7,6 +7,7 @@
  */
 import { desc, eq } from 'drizzle-orm';
 import { getDb } from '@/lib/db/client';
+import { minutesSince } from '@/lib/format/dates';
 import { etlRunLog } from '@/lib/db/schema';
 import type { AssertionVerdict } from './types';
 
@@ -130,6 +131,37 @@ export async function lastRunFor(connector: string): Promise<RunRecord | null> {
     };
   }
   return memory.find((r) => r.connector === connector) ?? null;
+}
+
+/**
+ * How long a `running` row is believed before it is treated as abandoned.
+ *
+ * A serverless invocation killed at its time limit never gets to write the
+ * outcome, so the row stays `running` forever. Without an expiry that one
+ * orphan blocks every future run of that connector — the scheduler would see
+ * "already running" on every tick and the connector would go permanently stale
+ * while the board showed no error at all.
+ */
+const RUNNING_STALE_MINUTES = 10;
+
+/**
+ * Is this connector mid-run right now?
+ *
+ * The concurrency guard exists because a double-write to the mart is the one
+ * failure the assertion gate cannot catch: both writers produce valid rows, and
+ * the result reconciles against nothing.
+ */
+export async function isRunning(connector: string): Promise<boolean> {
+  const run = await lastRunFor(connector);
+  if (!run || run.status !== 'running') return false;
+  return minutesSince(run.startedAt) < RUNNING_STALE_MINUTES;
+}
+
+/** Orphaned `running` rows, so the UI can show them as abandoned rather than live. */
+export async function abandonedRuns(): Promise<RunRecord[]> {
+  return (await recentRuns(200)).filter(
+    (r) => r.status === 'running' && minutesSince(r.startedAt) >= RUNNING_STALE_MINUTES,
+  );
 }
 
 export async function recentRuns(limit = 50): Promise<RunRecord[]> {

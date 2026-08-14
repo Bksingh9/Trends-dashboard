@@ -88,4 +88,8 @@ export interface ConnectorStatus extends ConnectorDescriptor {
   lastError: string | null;
   assertions: AssertionVerdict[];
   health: 'green' | 'amber' | 'red' | 'grey';
+  /** A run is in flight right now (and has not been abandoned). */
+  running: boolean;
+  /** Minutes until the scheduler will pick this up again. 0 means due now. */
+  nextDueInMinutes: number;
 }

@@ -5,54 +5,65 @@ and serves labelled fixtures for every connector that isn't configured yet.
 
 ---
 
-## Cron schedule — currently set for Hobby
+## Cron schedule — one heartbeat, SLA-driven
 
-Vercel's **Hobby plan allows 2 cron jobs, once a day**, so `vercel.json` ships
-with exactly that: one nightly run of every connector, and the morning brief.
+There is **one scheduled entry point**. It does not decide what to run; the
+freshness SLA declared on each connector does (ADR-003). `vercel.json` ships
+with:
 
 ```json
 "crons": [
-  { "path": "/api/cron/all",              "schedule": "0 1 * * *" },
-  { "path": "/api/insights?post=slack",   "schedule": "30 2 * * *" }
+  { "path": "/api/cron/tick",           "schedule": "*/15 * * * *" },
+  { "path": "/api/insights?post=slack", "schedule": "30 2 * * *" }
 ]
 ```
 
-Everything still refreshes daily and the brief still lands before stand-up. What
-you give up is the near-live cadence — the Scan Strip won't move within a day,
-and a connector failure surfaces the next morning rather than within the hour.
+`/api/cron/tick` reads the run log, finds everything past its SLA, and runs
+only that. Firing it more often than anything is due is cheap — it reads the
+log, finds nothing, and returns. So the only thing that matters is that it
+fires **at least as often as the tightest SLA in the registry**, which is
+currently 60 minutes (`api-latency`, `gcp-logging`, `jira`, `sentry`,
+`slack-alerts`). The `/connectors` page states this cadence in prose, and a
+unit test fails the build if the schedule here falls behind the SLAs.
+
+This replaced one cron entry per connector deliberately. A cron expression per
+connector drifts away from the SLA shown on `/connectors` until the two
+disagree and nobody can say which is the truth; and adding a fourteenth
+connector meant editing this file and redeploying. Now a new connector declares
+an SLA and the scheduler picks it up.
 
 Cron schedules in `vercel.json` are **UTC**. `30 2 * * *` is 08:00 IST.
 
-### On upgrading to Pro, paste this back
+### If you are on Hobby
 
-The §6.4 cadence, which is what the dashboard is designed around:
+Vercel's **Hobby plan runs cron jobs once a day**, at an approximate hour. The
+schedule above is still correct — Vercel will simply invoke it daily, which
+means every SLA tighter than a day silently becomes daily.
 
-```json
-"crons": [
-  { "path": "/api/cron/bq-orders",              "schedule": "0 * * * *" },
-  { "path": "/api/cron/bq-ga4-events",          "schedule": "15 * * * *" },
-  { "path": "/api/cron/slack-catalogue-report", "schedule": "*/30 * * * *" },
-  { "path": "/api/cron/sheets-store-master",    "schedule": "30 0 * * *" },
-  { "path": "/api/cron/bq-catalogue-master",    "schedule": "30 23 * * *" },
-  { "path": "/api/cron/sentry",                 "schedule": "*/15 * * * *" },
-  { "path": "/api/cron/jira",                   "schedule": "*/30 * * * *" },
-  { "path": "/api/cron/gcp-logging",            "schedule": "*/15 * * * *" },
-  { "path": "/api/cron/api-latency",            "schedule": "20 * * * *" },
-  { "path": "/api/cron/slack-alerts",           "schedule": "*/30 * * * *" },
-  { "path": "/api/cron/test-ean-canary",        "schedule": "0 20 * * *" },
-  { "path": "/api/insights?post=slack",         "schedule": "30 2 * * *" }
-]
-```
+That is visible rather than hidden: the tick's own response reports
+`shortestSlaMinutes` and the cadence it needs, and any mart whose connector has
+gone past its SLA serves `stale` rather than `live`, so the affected cards say
+so on the page (§14.5). Nothing shows green on data that has stopped moving.
 
-### Meanwhile, on Hobby
+To get the real cadence, upgrade to Pro — no config change is needed, the same
+`*/15` schedule starts being honoured.
+
+### Running a connector by hand
 
 Any connector can still be run on demand — from the manual re-run on
 `/connectors`, or directly:
 
 ```bash
+# Run whatever is due right now, exactly as the heartbeat would
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/cron/tick
+
+# Force one connector regardless of its SLA
 curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
   https://<host>/api/cron/slack-catalogue-report
 ```
+
+Or press **run now** on that connector's row on `/connectors` — a server
+action, so no secret has to reach the browser.
 
 If you want tighter cadence without upgrading, point an external scheduler
 (GitHub Actions on a schedule, cron-job.org, or an existing internal runner) at

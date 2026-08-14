@@ -20,6 +20,9 @@ import {
 } from '@/lib/db/schema';
 import type { DataSourceState } from '@/lib/connectors/types';
 import type { DateWindow } from '@/lib/format/dates';
+import { minutesSince } from '@/lib/format/dates';
+import { getConnector } from '@/lib/connectors/registry';
+import { lastRunFor, type RunRecord } from '@/lib/connectors/run-log';
 import { fixtureCatalogueDaily, fixtureGaps, fixtureScanRows, type CatalogueDailyRow, type GapRow, type ScanRow } from '@/fixtures/catalogue';
 import {
   fixtureAppHealth,
@@ -60,15 +63,80 @@ function liveResult<T>(rows: T, source: string): Sourced<T> {
 }
 
 /**
+ * §14.5 — how old the rows behind a mart actually are.
+ *
+ * This is the loop the `avis_base_view` incident was missing. The mart had
+ * rows, the query succeeded, and every card rendered green — while the data
+ * behind it had stopped moving two weeks earlier. A successful SELECT proves
+ * the table exists, not that anything is still filling it.
+ *
+ * So a mart whose connector has not completed a run inside its freshness SLA
+ * serves `stale`, not `live`, and says how old it is. `stale` is a real state
+ * in the §14.5 vocabulary and the KPI card renders it distinctly.
+ */
+export async function freshnessOf(
+  connectorIds: string[],
+  // Injected so the rule can be tested against a run history that does not
+  // exist yet — there is no way to make a real connector two weeks stale
+  // inside a test run.
+  readRun: (id: string) => Promise<Pick<RunRecord, 'finishedAt' | 'status' | 'error'> | null> = lastRunFor,
+): Promise<{ state: 'live' | 'stale'; warnings: string[] }> {
+  if (connectorIds.length === 0) return { state: 'live', warnings: [] };
+
+  const warnings: string[] = [];
+  let stale = false;
+
+  for (const id of connectorIds) {
+    const connector = getConnector(id);
+    if (!connector) continue;
+    const run = await readRun(id);
+
+    // Never run, but the mart has rows: someone loaded it out of band. Worth
+    // saying, because nothing is keeping it current.
+    if (!run?.finishedAt) {
+      stale = true;
+      warnings.push(`${id} has no completed run on record — nothing is refreshing this data.`);
+      continue;
+    }
+
+    const ageMinutes = minutesSince(run.finishedAt);
+    if (ageMinutes > connector.freshnessSlaMinutes) {
+      stale = true;
+      warnings.push(
+        `${id} last completed ${formatAge(ageMinutes)} ago, past its ${formatAge(connector.freshnessSlaMinutes)} freshness SLA — these rows may not reflect what happened since.`,
+      );
+    }
+    if (run.status === 'fail') {
+      stale = true;
+      warnings.push(
+        `${id}'s last run failed, so the mart is on its last good snapshot (§6.3): ${run.error ?? 'no detail recorded'}`,
+      );
+    }
+  }
+
+  return { state: stale ? 'stale' : 'live', warnings };
+}
+
+function formatAge(minutes: number): string {
+  if (minutes < 90) return `${Math.round(minutes)} min`;
+  if (minutes < 60 * 48) return `${Math.round(minutes / 60)} h`;
+  return `${Math.round(minutes / 1440)} d`;
+}
+
+/**
  * Live reads are attempted and, on any failure, degrade to fixtures with the
  * error surfaced as a warning. The dashboard never shows an error page for a
  * data problem — it shows the data problem.
+ *
+ * `connectors` names which connectors keep this mart current, so a successful
+ * query over stale rows is reported as stale rather than live.
  */
 async function tryLive<T>(
   fn: () => Promise<T>,
   source: string,
   fallback: () => T,
   fallbackSource: string,
+  connectors: string[] = [],
 ): Promise<Sourced<T>> {
   const db = getDb();
   if (!db) return fixtureResult(fallback(), fallbackSource);
@@ -78,7 +146,14 @@ async function tryLive<T>(
     if (Array.isArray(rows) && rows.length === 0) {
       return fixtureResult(fallback(), fallbackSource, 'Mart is empty — connector has not run yet');
     }
-    return liveResult(rows, source);
+    const freshness = await freshnessOf(connectors);
+    return {
+      rows,
+      state: freshness.state,
+      source,
+      fetchedAt: new Date().toISOString(),
+      warnings: freshness.warnings,
+    };
   } catch (e) {
     return {
       rows: fallback(),
@@ -126,6 +201,7 @@ export async function getOrders(w: DateWindow): Promise<Sourced<OrderRow[]>> {
     'fact_orders (bq-orders)',
     () => fixtureOrders(w),
     'fixture: avis_base_view shape',
+    ['bq-orders'],
   );
 }
 
@@ -153,6 +229,7 @@ export async function getStores(): Promise<Sourced<FixtureStore[]>> {
     'dim_store (sheets-store-master)',
     () => FIXTURE_STORES,
     'fixture: store master sheet shape',
+    ['sheets-store-master'],
   );
 }
 
@@ -184,6 +261,7 @@ export async function getScans(w: DateWindow): Promise<Sourced<ScanRow[]>> {
     'fact_scan_daily (bq-ga4-events)',
     () => fixtureScanRows(w),
     'fixture: GA4 scan events',
+    ['bq-ga4-events'],
   );
 }
 
@@ -211,6 +289,7 @@ export async function getCatalogueDaily(w: DateWindow): Promise<Sourced<Catalogu
     'fact_catalogue_daily (slack-catalogue-report)',
     () => fixtureCatalogueDaily(w),
     'fixture: Tatsu Scan Catalog Daily Report',
+    ['slack-catalogue-report'],
   );
 }
 
@@ -234,6 +313,7 @@ export async function getGaps(w: DateWindow): Promise<Sourced<GapRow[]>> {
     'fact_catalogue_gap',
     () => fixtureGaps(w),
     'fixture: missing-EAN register',
+    ['bq-ga4-events', 'bq-catalogue-master'],
   );
 }
 
@@ -263,6 +343,7 @@ export async function getFunnel(w: DateWindow): Promise<Sourced<FunnelRow[]>> {
     'fact_funnel_daily (bq-ga4-events)',
     () => fixtureFunnel(w),
     'fixture: GA4 funnel events',
+    ['bq-ga4-events'],
   );
 }
 
@@ -294,6 +375,7 @@ export async function getAppHealth(w: DateWindow): Promise<Sourced<AppHealthRow[
     'fact_app_health_daily (sentry, gcp-logging)',
     () => fixtureAppHealth(w),
     'fixture: Sentry + GCP Logging',
+    ['sentry', 'gcp-logging'],
   );
 }
 
@@ -322,6 +404,7 @@ export async function getLatency(w: DateWindow): Promise<Sourced<LatencyRow[]>> 
     'fact_api_latency (api-latency)',
     () => fixtureLatency(w),
     'fixture: latency percentiles — SLO source unconfirmed (§13.7)',
+    ['api-latency'],
   );
 }
 
@@ -350,6 +433,7 @@ export async function getIssues(): Promise<Sourced<IssueRow[]>> {
     'fact_issues (jira, slack_noc, tasks_sheet)',
     () => fixtureIssues(),
     'fixture: Jira NI board + NOC escalations',
+    ['jira'],
   );
 }
 

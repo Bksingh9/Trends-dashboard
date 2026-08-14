@@ -106,7 +106,10 @@ curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
 curl -X POST -H "Authorization: Bearer $CRON_SECRET" \
   "https://<host>/api/cron/bq-orders?start=2026-08-01&end=2026-08-13"
 
-# Run everything, sequentially (shared quota buckets)
+# Run whatever is past its freshness SLA — what the heartbeat does
+curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/cron/tick
+
+# Run everything regardless of SLA, sequentially (shared quota buckets)
 curl -X POST -H "Authorization: Bearer $CRON_SECRET" https://<host>/api/cron/all
 
 # Post today's brief to Slack
@@ -118,6 +121,16 @@ VERIFY_BASE_URL=http://127.0.0.1:3100 npm run verify:browser
 ```
 
 ## Refresh cadence (§6.4)
+
+The cadence below is the *intent*. What actually drives the scheduler is the
+`freshnessSlaMinutes` declared on each connector, which `/api/cron/tick` reads
+every heartbeat (ADR-003). If this table and the code ever disagree, the code
+is the truth — and `/connectors` shows the same number, so the disagreement
+would be visible on the page.
+
+A mart whose connector has gone past its SLA serves `stale`, not `live`, and
+every card built from it says so. That loop is the reason the `avis_base_view`
+staleness could not happen the same way twice.
 
 | Data | Cadence |
 |---|---|

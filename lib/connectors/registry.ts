@@ -61,12 +61,19 @@ export async function connectorStatuses(): Promise<ConnectorStatus[]> {
       const freshnessMinutes = run?.finishedAt ? minutesSince(run.finishedAt) : null;
       const withinSla = freshnessMinutes != null && freshnessMinutes <= d.freshnessSlaMinutes;
 
+      // A run row still marked `running` after the stale threshold is an
+      // invocation that was killed before it could write its outcome. Showing
+      // it as live would be a permanent spinner; showing it as green would be a
+      // lie. It is `abandoned`, and it is the reason a connector went stale.
+      const running = run?.status === 'running';
+      const abandoned = running && minutesSince(run!.startedAt) >= 10;
+
       // grey = never configured, so it is not a failure — it is a known blocker.
       const health: ConnectorStatus['health'] = !d.configured
         ? 'grey'
-        : run?.status === 'fail'
+        : abandoned || run?.status === 'fail'
           ? 'red'
-          : run?.status === 'warn' || !withinSla
+          : run?.status === 'warn' || (!withinSla && run != null)
             ? 'amber'
             : run?.status === 'success'
               ? 'green'
@@ -75,13 +82,24 @@ export async function connectorStatuses(): Promise<ConnectorStatus[]> {
       return {
         ...d,
         lastRunAt: run?.finishedAt ?? run?.startedAt ?? null,
-        lastStatus: (run?.status === 'running' ? 'warn' : (run?.status ?? 'never')) as ConnectorStatus['lastStatus'],
+        lastStatus: (running
+          ? abandoned
+            ? 'fail'
+            : 'warn'
+          : (run?.status ?? 'never')) as ConnectorStatus['lastStatus'],
         rowsIngested: run?.rowsIngested ?? null,
         freshnessMinutes,
         withinSla,
-        lastError: run?.error ?? null,
+        lastError:
+          run?.error ??
+          (abandoned
+            ? `Run ${run!.runId} started ${Math.round(minutesSince(run!.startedAt))} min ago and never reported — the invocation was killed before it could finish.`
+            : null),
         assertions: run?.assertions ?? [],
         health,
+        running: running && !abandoned,
+        nextDueInMinutes:
+          freshnessMinutes == null ? 0 : Math.max(0, Math.round(d.freshnessSlaMinutes - freshnessMinutes)),
       };
     }),
   );

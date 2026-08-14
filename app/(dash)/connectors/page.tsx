@@ -7,6 +7,8 @@
  */
 import { connectorStatuses, lineage } from '@/lib/connectors/registry';
 import { recentRuns } from '@/lib/connectors/run-log';
+import { CONNECTORS } from '@/lib/connectors/registry';
+import { LiveRefresh, RunAllDueButton, RunButton } from '@/components/connectors/ConnectorControls';
 import { Column, DataTable, ModuleHeader } from '@/components/table/DataTable';
 import { formatCount } from '@/lib/format/currency';
 import { formatIST, relativeAge } from '@/lib/format/dates';
@@ -25,13 +27,23 @@ const HEALTH_DOT = {
 export default async function ConnectorsPage() {
   const [statuses, runs] = await Promise.all([connectorStatuses(), recentRuns(40)]);
   const lines = lineage();
+  const generatedAt = new Date().toISOString();
 
   const cols: Column<ConnectorStatus>[] = [
     {
       key: 'health',
       header: '',
       width: '2rem',
-      render: (c) => <span className={cn('inline-block h-2.5 w-2.5 rounded-full', HEALTH_DOT[c.health])} />,
+      render: (c) => (
+        <span
+          title={c.running ? 'Running now' : c.health}
+          className={cn(
+            'inline-block h-2.5 w-2.5 rounded-full',
+            HEALTH_DOT[c.health],
+            c.running && 'animate-pulse ring-2 ring-[var(--color-ion)]/50',
+          )}
+        />
+      ),
     },
     { key: 'name', header: 'Connector', render: (c) => <span title={c.id}>{c.displayName}</span> },
     { key: 'id', header: 'Id', render: (c) => <code className="num text-2xs">{c.id}</code> },
@@ -59,6 +71,30 @@ export default async function ConnectorsPage() {
       ),
     },
     { key: 'rows', header: 'Rows', numeric: true, render: (c) => formatCount(c.rowsIngested) },
+    {
+      key: 'due',
+      header: 'Next due',
+      numeric: true,
+      title: 'The scheduler runs a connector when it has gone longer than its freshness SLA. This is that countdown, not a fixed cron time.',
+      render: (c) =>
+        !c.configured ? (
+          <span className="text-[var(--text-muted)]">—</span>
+        ) : c.running ? (
+          <span className="text-[var(--color-ion)]">running</span>
+        ) : c.nextDueInMinutes === 0 ? (
+          <span className="text-[var(--color-warn)]">due now</span>
+        ) : (
+          <span className="text-[var(--text-muted)]">
+            {c.nextDueInMinutes >= 60 ? `${Math.round(c.nextDueInMinutes / 60)} h` : `${c.nextDueInMinutes} m`}
+          </span>
+        ),
+    },
+    {
+      key: 'run',
+      header: 'Run',
+      align: 'right',
+      render: (c) => <RunButton id={c.id} configured={c.configured} blockedBy={c.blockedBy} />,
+    },
     {
       key: 'blocked',
       header: 'Blocked by / last error',
@@ -122,6 +158,7 @@ export default async function ConnectorsPage() {
   ];
 
   const configured = statuses.filter((s) => s.configured).length;
+  const shortestSla = Math.min(...CONNECTORS.map((c) => c.freshnessSlaMinutes));
 
   return (
     <div className="space-y-5">
@@ -134,6 +171,19 @@ export default async function ConnectorsPage() {
           <span className="num">{configured}</span> of <span className="num">{statuses.length}</span>{' '}
           connectors are configured. Unconfigured connectors serve fixtures with a visible marker
           rather than blocking the build (§14.5) — nothing here blocks on a credential.
+        </p>
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+          <RunAllDueButton />
+          <LiveRefresh generatedAt={generatedAt} />
+        </div>
+        {/* §6.4 — the schedule is the SLA, not a cron expression. Stating the
+            required heartbeat here means a schedule that has fallen behind the
+            SLAs is visible on the page rather than buried in vercel.json. */}
+        <p className="mt-2 text-2xs text-[var(--text-muted)]">
+          Scheduling is SLA-driven: <code className="num">/api/cron/tick</code> runs whatever has gone
+          past its freshness SLA. The tightest SLA here is{' '}
+          <span className="num">{shortestSla >= 60 ? `${Math.round(shortestSla / 60)} h` : `${shortestSla} min`}</span>
+          , so the heartbeat has to fire at least that often for every SLA on this page to be met.
         </p>
       </ModuleHeader>
 
@@ -151,7 +201,7 @@ export default async function ConnectorsPage() {
         columns={runCols}
         rows={runs}
         rowKey={(r) => String(r.runId)}
-        emptyMessage="No runs yet — trigger one from /api/cron/[connector]"
+        emptyMessage="No runs yet — press “run now” on any configured connector, or wait for the heartbeat"
         sourceNote="etl_run_log"
         maxHeight={360}
       />
