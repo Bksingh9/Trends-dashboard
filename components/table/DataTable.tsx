@@ -4,6 +4,8 @@
  * visitor.
  */
 import { cn } from '@/lib/cn';
+import { csvFilename, toCsv } from '@/lib/format/csv';
+import { CsvExport } from './CsvExport';
 
 export interface Column<T> {
   key: string;
@@ -65,6 +67,11 @@ export function DataTable<T>({
   const hidden = truncation ? rows.slice(truncation.limit) : [];
   const residual = truncation?.residual && hidden.length > 0 ? truncation.residual(hidden) : null;
 
+  // §9.6 — built from every row, not the visible slice. Somebody exporting a
+  // truncated table and getting the truncation is the one outcome nobody
+  // expects, and it silently drops the tail that made them look.
+  const exportable = caption ? toCsv(rows as Array<Record<string, unknown>>) : null;
+
   return (
     // min-w-0 is load-bearing: this is usually a grid or flex item, and those
     // default to `min-width: auto`, so the item sizes to the table's intrinsic
@@ -81,10 +88,20 @@ export function DataTable<T>({
       {caption && (
         <div className="flex items-baseline justify-between gap-3 border-b border-[var(--color-edge)] px-3 py-2">
           <span className="label">{caption}</span>
-          <span className="num text-2xs text-[var(--text-muted)]">
-            {hidden.length > 0
-              ? `Top ${visible.length} of ${total} by ${truncation!.sortKey}`
-              : `${total} rows`}
+          <span className="flex items-center gap-2.5">
+            <span className="num text-2xs text-[var(--text-muted)]">
+              {hidden.length > 0
+                ? `Top ${visible.length} of ${total} by ${truncation!.sortKey}`
+                : `${total} rows`}
+            </span>
+            {exportable && exportable.rowCount > 0 && (
+              <CsvExport
+                csv={exportable.csv}
+                filename={csvFilename(caption)}
+                rowCount={exportable.rowCount}
+                droppedColumns={exportable.droppedColumns}
+              />
+            )}
           </span>
         </div>
       )}

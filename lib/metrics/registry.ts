@@ -702,14 +702,27 @@ export const METRICS = {
   },
   open_close_ratio: {
     id: 'open_close_ratio',
-    label: 'Open vs close (7d)',
+    label: 'Opened per closed (7d)',
     domain: 'issues',
-    unit: 'ratio',
+    /**
+     * A quotient of two counts, not a proportion.
+     *
+     * It was declared `ratio`, and `ratio` in this registry means 0–1 and is
+     * rendered as a percentage — so 1.5 opened for every 1 closed printed as
+     * "150%", which reads as a share of something and is not one. Nobody closes
+     * 150% of their issues. `score` renders it as `1.5`, which is what the
+     * number is, and the description says which side of 1 is bad.
+     *
+     * Caught by the reconciliation suite's "every rate is inside 0–1" check —
+     * the point of that check is that a unit is a claim about the number.
+     */
+    unit: 'score',
     direction: 'down_good',
-    formula: 'opened / closed in trailing 7d',
+    formula: 'issues opened / issues closed in the trailing 7 days',
     source: 'jira',
     grain: 'week',
-    description: 'Above 1 means the backlog is growing.',
+    description:
+      'Above 1 means the backlog is growing: more issues arrived than were closed. Below 1 means it is shrinking.',
     cadence: '30 min',
   },
 
