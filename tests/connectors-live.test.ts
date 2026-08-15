@@ -8,6 +8,8 @@
  * something that notices a connector has not run, and something that makes the
  * cards say so.
  */
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { CONNECTORS, connectorStatuses, getConnector } from '@/lib/connectors/registry';
 import { isDue, SNAPSHOT_CONNECTORS, tick, windowFor, WINDOW_DAYS } from '@/lib/connectors/scheduler';
@@ -322,8 +324,6 @@ describe('§13 — nothing is missing when a credential finally arrives', () => 
     // A connector whose credential is documented nowhere is one nobody will
     // ever configure — it just sits grey on /connectors forever, and the
     // reason is invisible.
-    const { readFileSync, readdirSync } = require('node:fs') as typeof import('node:fs');
-    const { join } = require('node:path') as typeof import('node:path');
 
     const documented = new Set(
       (readFileSync('.env.example', 'utf8').match(/^#?\s*([A-Z][A-Z0-9_]{3,})=/gm) ?? []).map((l) =>
@@ -386,8 +386,6 @@ describe('§7 — every mart the serving layer reads has a connector that fills 
     // written, the transform was written, the assertions were written, the
     // table existed. Only the wiring between them was missing, and nothing in
     // the type system or the tests looked across that seam.
-    const { readFileSync, readdirSync } = require('node:fs') as typeof import('node:fs');
-    const { join } = require('node:path') as typeof import('node:path');
 
     const repo = readFileSync('lib/data/repository.ts', 'utf8');
     const read = new Set(
@@ -412,7 +410,6 @@ describe('§7 — every mart the serving layer reads has a connector that fills 
     // The freshness rule can only report a stale mart if it knows which
     // connector owns it. A `tryLive` call with no connector ids always reads
     // `live`, which is the exact failure §14.5 exists to prevent.
-    const { readFileSync } = require('node:fs') as typeof import('node:fs');
     const repo = readFileSync('lib/data/repository.ts', 'utf8');
 
     // Every tryLive call must pass a non-empty connector list.

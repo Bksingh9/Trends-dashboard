@@ -10,17 +10,11 @@
  * for an afternoon; "the key parsed, the token exchanged, the dataset is not
  * visible to this service account" is a five-minute fix.
  */
-import { getSourceType } from './source-types';
+import { getSourceType, validate } from './source-types';
+import { SAAS_TESTS } from './saas';
+import type { TestResult } from './result';
 
-export interface TestResult {
-  ok: boolean;
-  /** One line, in the words the UI will show. */
-  summary: string;
-  /** Each hop attempted, in order, so a failure is located rather than guessed. */
-  steps: Array<{ label: string; ok: boolean; detail: string }>;
-  /** Anything worth knowing that is not a pass/fail — discovered names, counts. */
-  findings?: string[];
-}
+export type { TestResult };
 
 const fail = (summary: string, steps: TestResult['steps']): TestResult => ({ ok: false, summary, steps });
 
@@ -277,7 +271,313 @@ async function testAnthropic(v: Record<string, string>): Promise<TestResult> {
   return ok ? { ok: true, summary: 'Anthropic reachable.', steps } : fail('The API key was rejected.', steps);
 }
 
+async function testMysql(v: Record<string, string>): Promise<TestResult> {
+  const steps: TestResult['steps'] = [];
+  const findings: string[] = [];
+
+  const ok = await step(steps, 'Connect and SELECT 1', async () => {
+    const mysql = await import('mysql2/promise');
+    const conn = await mysql.createConnection({ uri: v.url, connectTimeout: 10_000 });
+    try {
+      await conn.query('select 1');
+      const [ver] = await conn.query<never[]>('select version() as v');
+      findings.push(`MySQL ${(ver as unknown as Array<{ v: string }>)[0].v}`);
+      const [tbl] = await conn.query<never[]>(
+        'select count(*) as n from information_schema.tables where table_schema = database()',
+      );
+      const n = (tbl as unknown as Array<{ n: number }>)[0].n;
+      findings.push(n === 0 ? 'No tables in this database.' : `${n} tables visible.`);
+      return 'connected';
+    } finally {
+      await conn.end();
+    }
+  });
+
+  return ok
+    ? { ok: true, summary: 'Database reachable.', steps, findings }
+    : fail('Could not connect. Check the host, port, credentials and any IP allowlist.', steps);
+}
+
+/**
+ * Snowflake, through the SQL API rather than a driver.
+ *
+ * `snowflake-sdk` is a large dependency for one `SELECT 1`, and the SQL API is
+ * a plain HTTPS call once the JWT is signed — the same shape as the GCP auth
+ * this codebase already does by hand.
+ */
+async function testSnowflake(v: Record<string, string>): Promise<TestResult> {
+  const steps: TestResult['steps'] = [];
+  const findings: string[] = [];
+
+  // Snowflake wants the account and user upper-cased inside the JWT claims,
+  // and the account without its region suffix for the `iss`/`sub` pair.
+  const account = (v.account ?? '').split('.')[0].toUpperCase();
+  const user = (v.username ?? '').toUpperCase();
+
+  let jwt = '';
+  const signedOk = await step(steps, 'Key-pair JWT signs', async () => {
+    const { createPrivateKey, createPublicKey, createHash, createSign } = await import('node:crypto');
+    const key = createPrivateKey(v.privateKey);
+    const der = createPublicKey(key).export({ type: 'spki', format: 'der' });
+    const fingerprint = `SHA256:${createHash('sha256').update(der).digest('base64')}`;
+
+    const now = Math.floor(Date.now() / 1000);
+    const header = { alg: 'RS256', typ: 'JWT' };
+    const claims = {
+      iss: `${account}.${user}.${fingerprint}`,
+      sub: `${account}.${user}`,
+      iat: now,
+      exp: now + 300,
+    };
+    const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const body = `${b64(header)}.${b64(claims)}`;
+    const sig = createSign('RSA-SHA256').update(body).sign(key).toString('base64url');
+    jwt = `${body}.${sig}`;
+    return fingerprint;
+  });
+  if (!signedOk) {
+    return fail('The private key could not be read. It must be an unencrypted PKCS#8 PEM.', steps);
+  }
+
+  const host = `https://${v.account}.snowflakecomputing.com`;
+  const ran = await step(steps, 'SELECT 1 through the SQL API', async () => {
+    const res = await fetch(`${host}/api/v2/statements`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        'X-Snowflake-Authorization-Token-Type': 'KEYPAIR_JWT',
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        statement: 'select current_version() as v, current_account() as a',
+        timeout: 20,
+        warehouse: v.warehouse,
+        database: v.database,
+        schema: v.schema || undefined,
+        role: v.role || undefined,
+      }),
+    });
+    if (res.status === 401) {
+      // The most common real failure, and the least obvious: the key is fine,
+      // it is just not the key registered against this user.
+      throw new Error('rejected — is this key set on the user? ALTER USER … SET RSA_PUBLIC_KEY');
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status} — ${(await res.text()).slice(0, 160)}`);
+    const body = (await res.json()) as { data?: string[][] };
+    const row = body.data?.[0] ?? [];
+    if (row.length) findings.push(`Snowflake ${row[0]} on account ${row[1]}`);
+    return 'query returned';
+  });
+
+  return ran
+    ? { ok: true, summary: `Connected to ${v.account}.`, steps, findings }
+    : fail('Snowflake rejected the request. Check the account identifier, user and warehouse.', steps);
+}
+
+async function testSqlServer(v: Record<string, string>): Promise<TestResult> {
+  const steps: TestResult['steps'] = [];
+  const findings: string[] = [];
+
+  const ok = await step(steps, 'Connect and SELECT @@VERSION', async () => {
+    const mssql = (await import('mssql')).default;
+    const pool = new mssql.ConnectionPool({
+      server: v.server,
+      database: v.database,
+      user: v.username,
+      password: v.password,
+      port: v.port ? Number(v.port) : 1433,
+      // Defaults to on: Azure SQL rejects an unencrypted connection, and the
+      // resulting error names TLS rather than the setting that caused it.
+      options: { encrypt: v.encrypt !== 'false', trustServerCertificate: v.encrypt === 'false' },
+      connectionTimeout: 15_000,
+      requestTimeout: 15_000,
+    });
+    try {
+      await pool.connect();
+      const ver = await pool.request().query<{ v: string }>('select @@VERSION as v');
+      findings.push(ver.recordset[0].v.split('\n')[0]);
+      const tbl = await pool
+        .request()
+        .query<{ n: number }>("select count(*) as n from information_schema.tables where table_type = 'BASE TABLE'");
+      const n = tbl.recordset[0].n;
+      findings.push(n === 0 ? 'No base tables in this database.' : `${n} tables visible.`);
+      return 'connected';
+    } finally {
+      await pool.close();
+    }
+  });
+
+  return ok
+    ? { ok: true, summary: 'Database reachable.', steps, findings }
+    : fail('Could not connect. Check the server, port, credentials and any firewall rule.', steps);
+}
+
+/** Follows a dotted path, so `data.items` reaches the array people actually have. */
+function atPath(body: unknown, path: string): unknown {
+  if (!path.trim()) return body;
+  return path.split('.').reduce<unknown>((acc, k) => {
+    if (acc && typeof acc === 'object') return (acc as Record<string, unknown>)[k];
+    return undefined;
+  }, body);
+}
+
+async function testRestApi(v: Record<string, string>): Promise<TestResult> {
+  const steps: TestResult['steps'] = [];
+  const findings: string[] = [];
+
+  let body: unknown;
+  const fetched = await step(steps, `GET ${new URL(v.baseUrl).host}`, async () => {
+    const res = await fetchWithTimeout(v.baseUrl, {
+      headers: {
+        Accept: 'application/json',
+        ...(v.authHeader ? { Authorization: v.authHeader } : {}),
+      },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    const text = await res.text();
+    try {
+      body = JSON.parse(text);
+    } catch {
+      throw new Error(`the response is not JSON — it starts "${text.slice(0, 60)}"`);
+    }
+    return `HTTP ${res.status}, ${text.length} bytes`;
+  });
+  if (!fetched) return fail('The endpoint did not return usable JSON.', steps);
+
+  // Shape, not just reachability. A 200 with the rows at a different path is
+  // exactly the silent failure this whole test layer exists to catch.
+  const shaped = await step(steps, 'Rows found in the response', async () => {
+    const rows = atPath(body, v.jsonPath ?? '');
+    if (!Array.isArray(rows)) {
+      const keys =
+        body && typeof body === 'object' ? Object.keys(body as object).slice(0, 12).join(', ') : typeof body;
+      throw new Error(
+        v.jsonPath
+          ? `nothing array-shaped at "${v.jsonPath}". Top-level keys: ${keys}`
+          : `the body is not an array. Set a path to the rows — top-level keys: ${keys}`,
+      );
+    }
+    const first = rows[0];
+    if (first && typeof first === 'object') {
+      findings.push(`Columns: ${Object.keys(first as object).slice(0, 15).join(' · ')}`);
+    }
+    return `${rows.length} rows`;
+  });
+
+  return shaped
+    ? { ok: true, summary: 'Endpoint reachable and the rows were found.', steps, findings }
+    : { ok: false, summary: 'The endpoint answered, but the rows are not where the path says.', steps, findings };
+}
+
+async function testCsvUrl(v: Record<string, string>): Promise<TestResult> {
+  const steps: TestResult['steps'] = [];
+  const findings: string[] = [];
+  const delimiter = v.delimiter || ',';
+
+  const ok = await step(steps, `Fetch the first rows of ${new URL(v.url).pathname.split('/').pop()}`, async () => {
+    // Range first: a 500 MB export should not be downloaded to read a header.
+    const res = await fetchWithTimeout(v.url, {
+      headers: {
+        Range: 'bytes=0-16383',
+        ...(v.authHeader ? { Authorization: v.authHeader } : {}),
+      },
+    });
+    if (!res.ok && res.status !== 206) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    if (res.status !== 206) findings.push('The server ignored the range request — the whole file would be read.');
+
+    const text = await res.text();
+    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+    if (lines.length === 0) throw new Error('the file is empty');
+
+    const header = lines[0].split(delimiter);
+    if (header.length === 1) {
+      throw new Error(
+        `no "${delimiter === '\t' ? 'tab' : delimiter}" in the header row — is the delimiter right? Row 1 reads "${lines[0].slice(0, 80)}"`,
+      );
+    }
+    findings.push(`Columns: ${header.map((h) => h.trim().replace(/^"|"$/g, '')).slice(0, 15).join(' · ')}`);
+
+    // Ragged rows are the thing that turns into a wrong number three screens
+    // later, so they are reported here rather than discovered in a chart.
+    const ragged = lines.slice(1, 50).filter((l) => l.split(delimiter).length !== header.length).length;
+    if (ragged > 0) findings.push(`⚠ ${ragged} of the first 49 rows have a different column count.`);
+    return `${header.length} columns, ${lines.length - 1}+ rows`;
+  });
+
+  return ok
+    ? { ok: true, summary: 'File readable and parsed.', steps, findings }
+    : fail('Could not read the file. Check the URL, any auth header, and the delimiter.', steps);
+}
+
+async function testGcs(v: Record<string, string>): Promise<TestResult> {
+  const steps: TestResult['steps'] = [];
+  const findings: string[] = [];
+
+  let email = '';
+  const parsedOk = await step(steps, 'Service-account key parses', async () => {
+    email = (JSON.parse(v.serviceAccountJson) as { client_email?: string }).client_email ?? '';
+    if (!email) throw new Error('No client_email in the key');
+    return email;
+  });
+  if (!parsedOk) return fail('The key could not be read as JSON.', steps);
+
+  const ok = await step(steps, `Objects under gs://${v.bucket}/${v.prefix ?? ''}`, async () => {
+    const { getAccessToken } = await import('@/lib/gcp/auth');
+    const token = await getAccessTokenWith(v.serviceAccountJson, getAccessToken, [
+      'https://www.googleapis.com/auth/devstorage.read_only',
+    ]);
+    const url = new URL(`https://storage.googleapis.com/storage/v1/b/${encodeURIComponent(v.bucket)}/o`);
+    url.searchParams.set('maxResults', '10');
+    if (v.prefix) url.searchParams.set('prefix', v.prefix);
+
+    const res = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (res.status === 403) throw new Error(`grant ${email} Storage Object Viewer on this bucket`);
+    if (res.status === 404) throw new Error(`no bucket named "${v.bucket}" is visible to this account`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+    const body = (await res.json()) as { items?: Array<{ name: string; size?: string; updated?: string }> };
+    const items = body.items ?? [];
+    if (items.length === 0) {
+      // Authenticated and empty is a real answer, not a failure — but it is
+      // almost always a prefix typo, so say which.
+      throw new Error(
+        v.prefix
+          ? `the bucket is readable but nothing matches the prefix "${v.prefix}"`
+          : 'the bucket is readable but empty',
+      );
+    }
+    const newest = items.reduce((a, b) => ((a.updated ?? '') > (b.updated ?? '') ? a : b));
+    findings.push(`Newest: ${newest.name}${newest.updated ? ` (${newest.updated.slice(0, 10)})` : ''}`);
+    findings.push(`Sample: ${items.slice(0, 5).map((i) => i.name).join(' · ')}`);
+    return `${items.length}${items.length === 10 ? '+' : ''} objects`;
+  });
+
+  return ok
+    ? { ok: true, summary: `Bucket readable.`, steps, findings }
+    : fail(`Could not list the bucket. Grant ${email} Storage Object Viewer.`, steps);
+}
+
 /* ── helpers ─────────────────────────────────────────────────────────────── */
+
+/**
+ * A fetch that cannot hang.
+ *
+ * A "Test connection" button that spins forever is worse than one that fails:
+ * it teaches people the feature is broken rather than that the host is wrong.
+ */
+async function fetchWithTimeout(url: string | URL, init: RequestInit = {}, ms = 20_000): Promise<Response> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: ctl.signal });
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') throw new Error(`no response within ${ms / 1000}s`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * Runs a function with temporary env, then restores it.
@@ -310,7 +610,17 @@ async function getAccessTokenWith(
   return withEnv({ GCP_SA_KEY_JSON: saJson }, () => getToken(scopes));
 }
 
-const TESTS: Record<string, (v: Record<string, string>) => Promise<TestResult>> = {
+/**
+ * Every type in the catalogue must appear here.
+ *
+ * It did not, for a while: five types were offered in the picker with no test
+ * and no connector behind them. They would accept a credential, save it, and do
+ * nothing — the same false-configuration failure as a mart with no writer, and
+ * the one thing this dashboard is supposed to make impossible. `credentials.test.ts`
+ * now asserts this map covers `SOURCE_TYPES`, so the next type added cannot ship
+ * half-built.
+ */
+export const TESTS: Record<string, (v: Record<string, string>) => Promise<TestResult>> = {
   bigquery: testBigQuery,
   postgres: testPostgres,
   'google-sheets': testSheets,
@@ -319,6 +629,15 @@ const TESTS: Record<string, (v: Record<string, string>) => Promise<TestResult>> 
   jira: testJira,
   ga4: testSheets, // same auth hop; the property check needs the Data API scope
   anthropic: testAnthropic,
+  mysql: testMysql,
+  snowflake: testSnowflake,
+  sqlserver: testSqlServer,
+  'rest-api': testRestApi,
+  'csv-url': testCsvUrl,
+  gcs: testGcs,
+  // The SaaS families come from the same declaration that produced their source
+  // types, so this half of the map cannot fall behind the catalogue.
+  ...SAAS_TESTS,
 };
 
 export async function testConnection(
@@ -329,10 +648,25 @@ export async function testConnection(
   if (!type) return fail(`Unknown source type "${typeId}"`, []);
   const fn = TESTS[typeId];
   if (!fn) {
+    // Unreachable if the coverage test passes. Kept as a loud failure rather
+    // than a soft "saved untested", because saving a credential nothing reads
+    // is the failure, not a degraded mode of it.
+    return fail(
+      `${type.label} is listed but has no connection test — that is a bug in this build, not in your credential.`,
+      [],
+    );
+  }
+  // Shape first: a typo should cost no round trip and no rate-limit budget.
+  const shape = validate(type, values);
+  if (!shape.ok) {
     return {
       ok: false,
-      summary: `No connection test is implemented for ${type.label} yet — it will be saved untested.`,
-      steps: [],
+      summary: shape.errors.map((e) => e.message).join('; '),
+      steps: shape.errors.map((e) => ({
+        label: type.fields.find((f) => f.key === e.field)?.label ?? e.field,
+        ok: false,
+        detail: e.message,
+      })),
     };
   }
   try {

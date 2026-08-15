@@ -12,6 +12,8 @@
  * form is hand-written drifts from its test; the two are the same data here.
  */
 
+import { SAAS_TYPES } from './saas';
+
 export type FieldKind = 'text' | 'password' | 'textarea' | 'select' | 'boolean';
 
 export interface SourceField {
@@ -338,16 +340,83 @@ const GENERIC_TYPES: SourceType[] = [
     category: 'warehouse',
     blurb: 'Warehouse tables, for exploration and charting.',
     aliases: ['warehouse', 'sql'],
+    /**
+     * Key-pair, not a password.
+     *
+     * Snowflake's SQL API v2 accepts a key-pair JWT or OAuth and does *not*
+     * accept a username and password, so a password form here would have been a
+     * field nobody could make work. It also means no driver: the JWT is signed
+     * with `node:crypto` exactly as the GCP one is.
+     */
     fields: [
-      { key: 'account', label: 'Account identifier', kind: 'text', required: true, placeholder: 'xy12345.ap-south-1' },
+      {
+        key: 'account',
+        label: 'Account identifier',
+        kind: 'text',
+        required: true,
+        placeholder: 'xy12345.ap-south-1',
+        help: 'From the account URL, without .snowflakecomputing.com.',
+      },
+      {
+        key: 'username',
+        label: 'Username',
+        kind: 'text',
+        required: true,
+        help: 'The user the public key is registered against (ALTER USER … SET RSA_PUBLIC_KEY).',
+      },
+      {
+        key: 'privateKey',
+        label: 'Private key (PEM)',
+        kind: 'textarea',
+        secret: true,
+        required: true,
+        placeholder: '-----BEGIN PRIVATE KEY-----\n…',
+        pattern: 'BEGIN (RSA )?PRIVATE KEY',
+        patternHint: 'Paste the unencrypted PKCS#8 PEM, including the BEGIN/END lines.',
+      },
       { key: 'warehouse', label: 'Warehouse', kind: 'text', required: true },
       { key: 'database', label: 'Database', kind: 'text', required: true },
-      { key: 'username', label: 'Username', kind: 'text', required: true },
-      { key: 'password', label: 'Password', kind: 'password', secret: true, required: true },
+      { key: 'schema', label: 'Schema', kind: 'text', placeholder: 'PUBLIC' },
+      { key: 'role', label: 'Role', kind: 'text' },
     ],
     enables: ['Ask-the-data', 'custom charts'],
     supersedes: [],
-    testDescription: 'Authenticates and runs SELECT 1.',
+    testDescription: 'Signs a key-pair JWT and runs SELECT 1 through the SQL API.',
+    genericOnly: true,
+  },
+  {
+    id: 'sqlserver',
+    label: 'Microsoft SQL Server',
+    category: 'database',
+    blurb: 'SQL Server or Azure SQL — where a lot of retail reporting still lives.',
+    aliases: ['mssql', 'azure sql', 'tsql', 'sql', 'microsoft', 'power bi'],
+    fields: [
+      { key: 'server', label: 'Server', kind: 'text', required: true, placeholder: 'acme.database.windows.net' },
+      { key: 'database', label: 'Database', kind: 'text', required: true },
+      { key: 'username', label: 'Username', kind: 'text', required: true },
+      { key: 'password', label: 'Password', kind: 'password', secret: true, required: true },
+      {
+        key: 'port',
+        label: 'Port',
+        kind: 'text',
+        placeholder: '1433',
+        pattern: '^\\d+$',
+        patternHint: 'Digits only.',
+      },
+      {
+        key: 'encrypt',
+        label: 'Encryption',
+        kind: 'select',
+        options: [
+          { value: 'true', label: 'Required (Azure SQL, and the right answer)' },
+          { value: 'false', label: 'Off (legacy on-premise only)' },
+        ],
+        help: 'Azure SQL rejects an unencrypted connection outright; an on-premise instance may not offer one.',
+      },
+    ],
+    enables: ['Ask-the-data', 'custom charts'],
+    supersedes: [],
+    testDescription: 'Opens a connection and runs SELECT @@VERSION.',
     genericOnly: true,
   },
   {
@@ -440,6 +509,14 @@ const GENERIC_TYPES: SourceType[] = [
 ];
 
 for (const t of GENERIC_TYPES) SOURCE_TYPES.push(t);
+
+/**
+ * …and the SaaS families, declared next to their probes in `saas.ts` so a type
+ * and its connection test cannot drift apart. The import is a value import in
+ * this direction only — `saas.ts` takes types from here with `import type`,
+ * which erases, so there is no runtime cycle.
+ */
+for (const t of SAAS_TYPES) SOURCE_TYPES.push(t);
 
 /**
  * Search across label, blurb and aliases.

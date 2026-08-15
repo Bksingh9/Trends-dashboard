@@ -31,8 +31,6 @@ export interface SlackSample {
   text: string;
 }
 
-/* eslint-disable no-irregular-whitespace */
-
 export const SLACK_ALERT_SAMPLES: SlackSample[] = [
   {
     kind: 'sentry',
@@ -135,7 +133,6 @@ megatron          🟢  0 issues\`\`\`
   },
 ];
 
-/* eslint-enable no-irregular-whitespace */
 
 /**
  * §13.6 / A11 — what the channel proves about the Sentry side, confirmed by

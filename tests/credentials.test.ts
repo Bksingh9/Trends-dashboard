@@ -16,7 +16,7 @@ import {
 } from '@/lib/credentials/crypto';
 import { getSourceType, SOURCE_TYPES, secretFields, validate } from '@/lib/credentials/source-types';
 import { unmappedSupersedes, FIELD_TO_ENV } from '@/lib/credentials/apply';
-import { testConnection } from '@/lib/credentials/test-connection';
+import { testConnection, TESTS } from '@/lib/credentials/test-connection';
 
 const KEY = 'test-credential-key-at-least-16-chars-long';
 
@@ -135,7 +135,7 @@ describe('the source catalogue', () => {
     // pattern: a Jira *project* key is `NI`, and a GCP *project* id is public.
     // Widening the regex to let those through would also let a real token
     // through, which is the whole thing this is guarding.
-    const NOT_SECRETS = new Set(['projectKey', 'projectId', 'apiKey']);
+    const NOT_SECRETS = new Set(['projectKey', 'projectId', 'apiKey', 'apiKeyPublic', 'clientId']);
     for (const t of SOURCE_TYPES) {
       const secrets = new Set(secretFields(t));
       for (const f of t.fields) {
@@ -197,6 +197,55 @@ describe('the source catalogue', () => {
   });
 });
 
+describe('every offered type is actually connectable', () => {
+  /**
+   * The structural guard, added after five types shipped in the picker with no
+   * test and no connector behind them. A type that can be chosen but cannot be
+   * connected is the same failure as a mart with no writer: it looks configured
+   * and does nothing. Adding a type without a test now fails here rather than
+   * in front of somebody holding a token.
+   */
+  it('has a real connection test for every type in the catalogue', () => {
+    const missing = SOURCE_TYPES.filter((t) => !TESTS[t.id]).map((t) => t.id);
+    expect(missing, `no connection test for: ${missing.join(', ')}`).toEqual([]);
+  });
+
+  it('has no test for a type that is not offered', () => {
+    const ids = new Set(SOURCE_TYPES.map((t) => t.id));
+    expect(Object.keys(TESTS).filter((k) => !ids.has(k))).toEqual([]);
+  });
+
+  it('validates shape before making any network call', async () => {
+    // A blank form must not reach the wire. This also proves the validation the
+    // form does client-side is enforced again on the server, where it counts.
+    const r = await testConnection('rest-api', {});
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/required/i);
+    expect(r.steps.every((s) => s.ok === false)).toBe(true);
+  });
+
+  it('rejects a plaintext http endpoint before sending the credential', async () => {
+    const r = await testConnection('rest-api', {
+      baseUrl: 'http://example.com/rows',
+      authHeader: 'Bearer would-have-been-sent-in-clear',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/https/i);
+  });
+
+  it('rejects a Snowflake key that is not a PEM before signing anything', async () => {
+    const r = await testConnection('snowflake', {
+      account: 'xy12345.ap-south-1',
+      username: 'svc',
+      privateKey: 'not a pem',
+      warehouse: 'WH',
+      database: 'DB',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/PKCS#8|PEM/i);
+  });
+});
+
 describe('connection tests never throw to the UI', () => {
   it('returns a failure result for an unknown type', async () => {
     const r = await testConnection('does-not-exist', {});
@@ -214,9 +263,24 @@ describe('connection tests never throw to the UI', () => {
   });
 
   it('names the hop that failed rather than saying "connector down"', async () => {
+    // A key that clears the shape check but is not usable gets as far as the
+    // real hops, and the result says which one broke.
+    const r = await testConnection('bigquery', {
+      serviceAccountJson: '{"type":"service_account","private_key":"nonsense","client_email":"a@b.iam.gserviceaccount.com"}',
+      projectId: 'p',
+    });
+    expect(r.ok).toBe(false);
+    expect(r.steps.length).toBeGreaterThan(0);
+    expect(r.steps.some((s) => /parses|token exchange/i.test(s.label))).toBe(true);
+    expect(r.steps.some((s) => !s.ok)).toBe(true);
+  });
+
+  it('names the field, not the hop, when the credential never had a chance', async () => {
+    // Rejected on shape: no token spent, no rate-limit budget, and the message
+    // points at the input rather than at the network.
     const r = await testConnection('bigquery', { serviceAccountJson: 'not json', projectId: 'p' });
     expect(r.ok).toBe(false);
-    expect(r.steps[0].label).toMatch(/parses/i);
+    expect(r.steps[0].label).toBe('Service account JSON');
     expect(r.steps[0].ok).toBe(false);
   });
 });
