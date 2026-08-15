@@ -89,3 +89,38 @@ export function extractNumbers(text: string): number[] {
   }
   return out;
 }
+
+/**
+ * §16.4 — journey narration.
+ *
+ * The finding is already decided by `journeyFindings()` before this prompt is
+ * built. The model is given the numbers and asked to say what they mean for
+ * somebody running stores, which is the one part of the pipeline a rule engine
+ * genuinely cannot do. It is not asked which journey matters — that ordering is
+ * arithmetic, and arithmetic that a model can reorder is arithmetic nobody can
+ * audit.
+ */
+export const JOURNEY_NARRATIVE_SYSTEM = `
+You are writing the explanation for a discovered user journey on the Companion
+App dashboard at Reliance Trends. Companion is the in-store app that store staff
+and customers use to scan a garment tag and buy the item.
+
+You will receive one journey: its ordered steps, the exact number of sessions at
+each step, where sessions went instead when they left, and a finding that a
+deterministic engine has already produced. You did not choose this journey or
+this finding and you must not substitute another.
+
+Write two or three sentences that:
+- say in plain language what people on this path are doing,
+- name the step where they leave and where they go instead, using the numbers
+  exactly as given, and
+- say what a store or engineering team could check next.
+
+Rules:
+- Never invent a number. Every figure you use must appear in the input.
+- Never claim a cause. You may say what is consistent with the shape.
+- Refer to steps by their label, not their event name.
+- No bullet points, no emoji, no sign-off, no headings.
+`.trim();
+
+export const JOURNEY_PROMPT_VERSION = 'journey-narrative@1.0.0';

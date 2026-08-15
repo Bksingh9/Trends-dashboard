@@ -24,6 +24,9 @@ export const NAV: NavItem[] = [
   { href: '/', label: 'Hub', hint: 'Is Companion healthy today', group: 'domains' },
   { href: '/sales', label: 'Sales', hint: 'Orders, GMV, AOV, customers', group: 'domains' },
   { href: '/journey', label: 'Journey', hint: 'Scan → bag → pay → de-tag', group: 'domains' },
+  // §16.4 — the same domain read the other way round: paths found in the data
+  // rather than measured against a declared funnel.
+  { href: '/journey/discovered', label: 'Journeys found', hint: 'Routes nobody declared', group: 'domains' },
   { href: '/stores', label: 'Stores', hint: 'Adoption, dark stores, NOC', group: 'domains' },
   { href: '/catalogue', label: 'Catalogue', hint: 'Coverage, missing EANs', group: 'domains' },
   { href: '/app-health', label: 'App Health', hint: 'Crashes, latency, payments', group: 'domains' },

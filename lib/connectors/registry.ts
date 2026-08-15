@@ -18,6 +18,7 @@ import { slackCatalogueReport } from './slack-catalogue-report';
 import { bqOrders } from './bq-orders';
 import { bqGa4Events } from './bq-ga4-events';
 import { bqGa4Scans } from './bq-ga4-scans';
+import { bqGa4Journeys } from './bq-ga4-journeys';
 import { bqCatalogueMaster } from './bq-catalogue-master';
 import { catalogueGapRegister } from './catalogue-gap-register';
 import { sentry } from './sentry';
@@ -41,6 +42,10 @@ export const CONNECTORS: BaseConnector<any, any>[] = [
   // and one connector is one row type; sharing would mean a `load()` that
   // branches on which half it was handed.
   bqGa4Scans,
+  // The sequence half. `bq-ga4-events` throws the order away by aggregating per
+  // event per day; this keeps whole session paths so a journey can be
+  // discovered rather than declared (ADR-005).
+  bqGa4Journeys,
   bqCatalogueMaster,
   // Derived in Postgres from the two above — no credential of its own.
   catalogueGapRegister,

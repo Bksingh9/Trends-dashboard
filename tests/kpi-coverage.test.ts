@@ -12,6 +12,7 @@ import {
   appHealthModule,
   catalogueModule,
   issuesModule,
+  journeyDiscoveryModule,
   journeyModule,
   salesModule,
   storesModule,
@@ -28,6 +29,9 @@ const modules = await Promise.all([
   issuesModule(),
   // ADR-001 — loyalty metrics must reach a surface like every other metric.
   loyaltyModule(trailingWindow(28)),
+  // Appended, not inserted: the destructuring below is positional, and adding a
+  // module in the middle silently reassigns every name after it.
+  journeyDiscoveryModule(trailingWindow(28)),
 ]);
 
 const emitted = new Map(modules.flatMap((m) => m.kpis).map((k) => [k.id, k]));
@@ -71,7 +75,7 @@ describe('metrics with no feed are shown as missing, not omitted or zeroed', () 
 });
 
 describe('module KPI headers answer their module’s question', () => {
-  const [sales, journey, stores, catalogue, appHealth, issues] = modules;
+  const [sales, journey, stores, catalogue, appHealth, issues, , discovered] = modules;
 
   it('sales carries orders, revenue and AOV', () => {
     const ids = sales.kpis.map((k) => k.id);
@@ -86,6 +90,20 @@ describe('module KPI headers answer their module’s question', () => {
         'payment_success_rate', 'session_conversion',
       ]),
     );
+  });
+
+  it('discovered journeys carry their own §5 metrics, not the declared funnel’s', () => {
+    // The two journey surfaces measure different things and must not borrow
+    // each other's metric ids — a shared id would make one page's caveat apply
+    // silently to the other's numbers.
+    const ids = discovered.kpis.map((k) => k.id);
+    expect(ids).toEqual(
+      expect.arrayContaining([
+        'journeys_discovered', 'journey_worst_exit_rate',
+        'journey_sessions_at_risk', 'journey_path_coverage',
+      ]),
+    );
+    expect(ids).not.toContain('scan_success_rate');
   });
 
   it('stores carries the NOC operating metrics and rolls up by state', () => {

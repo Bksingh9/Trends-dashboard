@@ -142,6 +142,70 @@ export const factFunnelDaily = pgTable(
   ],
 );
 
+/* ── §16.4 Discovered journeys ───────────────────────────────────────────── */
+
+/**
+ * One row per distinct ordered event sequence, with the exact number of
+ * sessions that took it.
+ *
+ * `fact_funnel_daily` above cannot answer "what do people actually do": it is a
+ * per-event daily aggregate, so it knows how many sessions reached
+ * `begin_checkout` and nothing about how they got there. Reconstructing paths
+ * from it means multiplying edge probabilities, which assumes step 5 is
+ * independent of step 2 — the assumption a journey exists to disprove.
+ *
+ * Storing whole paths keeps every session count exact. The row count stays
+ * bounded because the extraction keeps only paths above a session floor; the
+ * long tail is summarised into a single `(other)` row rather than dropped, so
+ * the totals still reconcile against `fact_funnel_daily`.
+ */
+export const factJourneyPath = pgTable(
+  'fact_journey_path',
+  {
+    dateKey: date('date_key').notNull(),
+    platform: text('platform').notNull().default(''),
+    tenant: text('tenant').notNull().default('trends'),
+    /** Stable hash of `path`, because the path itself is too long for a key. */
+    pathHash: text('path_hash').notNull(),
+    /** Events in order, '>'-joined, consecutive duplicates already collapsed. */
+    path: text('path').notNull(),
+    stepCount: integer('step_count').notNull(),
+    sessions: bigint('sessions', { mode: 'number' }).notNull(),
+    convertedSessions: bigint('converted_sessions', { mode: 'number' }).notNull().default(0),
+    revenue: numeric('revenue', { precision: 16, scale: 2 }),
+    /** First step to last, where the export carried timestamps. */
+    medianSeconds: integer('median_seconds'),
+  },
+  (t) => [
+    primaryKey({ columns: [t.dateKey, t.platform, t.pathHash] }),
+    index('fact_journey_path_date_idx').on(t.dateKey),
+    index('fact_journey_path_sessions_idx').on(t.sessions),
+  ],
+);
+
+/**
+ * Per-event totals, and the only thing that decides what counts as an outcome.
+ *
+ * `revenueSessions` comes from GA4's own `ecommerce.purchase_revenue`, so
+ * "which event ends a converting journey" is read from the data rather than
+ * from a hardcoded list containing `purchase`. A second checkout flow under a
+ * different event name is then found rather than silently excluded.
+ */
+export const factEventNode = pgTable(
+  'fact_event_node',
+  {
+    dateKey: date('date_key').notNull(),
+    platform: text('platform').notNull().default(''),
+    tenant: text('tenant').notNull().default('trends'),
+    event: text('event').notNull(),
+    sessions: bigint('sessions', { mode: 'number' }).notNull(),
+    events: bigint('events', { mode: 'number' }).notNull(),
+    revenueSessions: bigint('revenue_sessions', { mode: 'number' }).notNull().default(0),
+    revenue: numeric('revenue', { precision: 16, scale: 2 }),
+  },
+  (t) => [primaryKey({ columns: [t.dateKey, t.platform, t.event] })],
+);
+
 /* ── §7.4 Scan events ────────────────────────────────────────────────────── */
 
 export const factScanDaily = pgTable(

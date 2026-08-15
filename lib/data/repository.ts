@@ -17,7 +17,11 @@ import {
   factCatalogueGap,
   factAppHealthDaily,
   factApiLatency,
+  factJourneyPath,
+  factEventNode,
 } from '@/lib/db/schema';
+import type { EventNode, JourneyPath } from '@/lib/metrics/journeys';
+import { fixtureEventNodes, fixtureJourneyPaths } from '@/fixtures/journeys';
 import type { DataSourceState } from '@/lib/connectors/types';
 import type { DateWindow } from '@/lib/format/dates';
 import { minutesSince } from '@/lib/format/dates';
@@ -454,6 +458,90 @@ export async function getIssues(): Promise<Sourced<IssueRow[]>> {
     () => fixtureIssues(),
     'fixture: Jira NI board + NOC escalations',
     ['jira'],
+  );
+}
+
+/* ── Discovered journeys (§16.4) ─────────────────────────────────────────── */
+
+/**
+ * Whole session paths, summed across the window.
+ *
+ * The `(other)` row is kept rather than filtered: it is the tail below the
+ * storage floor, and dropping it here would make the discovered journeys
+ * silently fail to add up to the session total on `/journey`.
+ */
+export async function getJourneyPaths(w: DateWindow): Promise<Sourced<JourneyPath[]>> {
+  return tryLive(
+    async () => {
+      const db = getDb()!;
+      const rows = await db
+        .select()
+        .from(factJourneyPath)
+        .where(and(gte(factJourneyPath.dateKey, w.start), lte(factJourneyPath.dateKey, w.end)));
+
+      // One row per path across the window, not per path per day: a journey is
+      // a shape, and the same shape on 28 days is one journey with 28 days of
+      // sessions behind it.
+      const agg = new Map<string, JourneyPath>();
+      for (const r of rows) {
+        const existing = agg.get(r.path);
+        const seconds = r.medianSeconds;
+        if (existing) {
+          existing.sessions += r.sessions;
+          existing.convertedSessions += r.convertedSessions;
+          existing.revenue += Number(r.revenue ?? 0);
+          // Weighted mean of daily medians. Not the true pooled median — the
+          // daily rows do not carry the distribution — so it is only ever shown
+          // as "typical", never as p50.
+          if (seconds != null && existing.medianSeconds != null) {
+            const total = existing.sessions;
+            existing.medianSeconds = Math.round(
+              (existing.medianSeconds * (total - r.sessions) + seconds * r.sessions) / total,
+            );
+          }
+        } else {
+          agg.set(r.path, {
+            steps: r.path === '(other)' ? ['(other)'] : r.path.split('>'),
+            sessions: r.sessions,
+            convertedSessions: r.convertedSessions,
+            revenue: Number(r.revenue ?? 0),
+            medianSeconds: seconds,
+          });
+        }
+      }
+      return [...agg.values()].sort((a, b) => b.sessions - a.sessions);
+    },
+    'fact_journey_path (bq-ga4-journeys)',
+    () => fixtureJourneyPaths(w),
+    'fixture: GA4 session paths',
+    ['bq-ga4-journeys'],
+  );
+}
+
+export async function getEventNodes(w: DateWindow): Promise<Sourced<EventNode[]>> {
+  return tryLive(
+    async () => {
+      const db = getDb()!;
+      const rows = await db
+        .select()
+        .from(factEventNode)
+        .where(and(gte(factEventNode.dateKey, w.start), lte(factEventNode.dateKey, w.end)));
+
+      const agg = new Map<string, EventNode>();
+      for (const r of rows) {
+        const n = agg.get(r.event) ?? { event: r.event, sessions: 0, events: 0, revenueSessions: 0, revenue: 0 };
+        n.sessions += r.sessions;
+        n.events += r.events;
+        n.revenueSessions += r.revenueSessions;
+        n.revenue += Number(r.revenue ?? 0);
+        agg.set(r.event, n);
+      }
+      return [...agg.values()].sort((a, b) => b.sessions - a.sessions);
+    },
+    'fact_event_node (bq-ga4-journeys)',
+    () => fixtureEventNodes(w),
+    'fixture: GA4 event totals',
+    ['bq-ga4-journeys'],
   );
 }
 

@@ -26,10 +26,20 @@ import {
 } from '@/lib/metrics/compute';
 import { reconcileGapRegister, type GapReconciliation } from '@/lib/metrics/reconcile';
 import {
+  compareJourneys,
+  discoverJourneys,
+  journeyFindings,
+  type DiscoveredJourney,
+  type JourneyFinding,
+  type JourneyShift,
+} from '@/lib/metrics/journeys';
+import {
   getAppHealth,
   getCatalogueDaily,
+  getEventNodes,
   getFunnel,
   getGaps,
+  getJourneyPaths,
   getIssues,
   getLatency,
   getOrders,
@@ -377,6 +387,107 @@ export async function journeyModule(input: ModuleInput = trailingWindow(28)): Pr
     scope: scope.description,
     compareLabel: COMPARE_LABELS[f.compare],
   };
+}
+
+/* ── /journey/discovered (§16.4) ─────────────────────────────────────────── */
+
+export interface JourneyDiscoveryData {
+  journeys: DiscoveredJourney[];
+  shifts: JourneyShift[];
+  findings: JourneyFinding[];
+  /** Sessions on paths too rare to store individually — the honest tail. */
+  tailSessions: number;
+  totalSessions: number;
+  /** Distinct events GA4 reported, so "we found four journeys" has a denominator. */
+  eventsSeen: number;
+}
+
+/**
+ * The journeys nobody declared.
+ *
+ * `journeyModule` above measures the eleven steps in `FUNNEL_STEPS`, which is
+ * the right tool for a funnel already agreed on and blind to everything else.
+ * This one starts from session paths and lets the ranking fall out of the data
+ * (ADR-005). The two are kept side by side deliberately: where they disagree,
+ * the disagreement is the finding.
+ */
+export async function journeyDiscoveryModule(
+  input: ModuleInput = trailingWindow(28),
+): Promise<ModuleResult<JourneyDiscoveryData>> {
+  const f = asFilters(input, 28);
+  const w = f.window;
+
+  const [paths, nodes] = await Promise.all([getJourneyPaths(w), getEventNodes(w)]);
+  const prevWindow = comparisonWindow(w, f.compare);
+  const [prevPaths, prevNodes] = await Promise.all([getJourneyPaths(prevWindow), getEventNodes(prevWindow)]);
+
+  // The tail is separated before discovery: `(other)` is a bucket, not a path,
+  // and walking it as one would invent a journey that nobody took.
+  const real = paths.rows.filter((p) => p.steps[0] !== '(other)');
+  const tailSessions = paths.rows
+    .filter((p) => p.steps[0] === '(other)')
+    .reduce((sum, p) => sum + p.sessions, 0);
+
+  const journeys = discoverJourneys(real, nodes.rows);
+  const previous = discoverJourneys(
+    prevPaths.rows.filter((p) => p.steps[0] !== '(other)'),
+    prevNodes.rows,
+  );
+  const shifts = compareJourneys(journeys, previous);
+  const findings = journeyFindings(journeys, shifts);
+
+  const totalSessions = real.reduce((sum, p) => sum + p.sessions, 0) + tailSessions;
+
+  // The headline numbers are §5 metrics like any other, so they carry state and
+  // a comparison rather than being bare figures on a page.
+  const worst = journeys[0];
+  const meta = { state: paths.state, fetchedAt: paths.fetchedAt };
+  const kpis: MetricValue[] = [
+    metricValue('journeys_discovered', journeys.length, meta),
+    // Exits, not `1 − retention`. The two differ wherever sessions forked, and
+    // a headline card disagreeing with the finding directly beneath it about
+    // the same step is how a dashboard loses its reader.
+    metricValue(
+      'journey_worst_exit_rate',
+      worstExitRate(worst),
+      worst?.worstStep ? meta : { ...meta, state: 'missing' },
+    ),
+    metricValue(
+      'journey_sessions_at_risk',
+      journeys.reduce((sum, j) => sum + j.impact, 0),
+      meta,
+    ),
+    metricValue(
+      'journey_path_coverage',
+      totalSessions > 0 ? (totalSessions - tailSessions) / totalSessions : null,
+      meta,
+    ),
+  ];
+
+  return {
+    kpis,
+    data: {
+      journeys,
+      shifts,
+      findings,
+      tailSessions,
+      totalSessions,
+      eventsSeen: nodes.rows.length,
+    },
+    window: w,
+    warnings: [...paths.warnings, ...nodes.warnings],
+    state: paths.state,
+    sources: [paths.source, nodes.source],
+    compareLabel: COMPARE_LABELS[f.compare],
+  };
+}
+
+/** Sessions that left at the worst step, over those that reached the one before. */
+function worstExitRate(j: DiscoveredJourney | undefined): number | null {
+  if (!j?.worstStep) return null;
+  const idx = j.steps.findIndex((s) => s.event === j.worstStep!.event);
+  const base = j.steps[idx - 1]?.sessions ?? j.entrySessions;
+  return base > 0 ? j.worstStep.exited / base : null;
 }
 
 /* ── /stores ─────────────────────────────────────────────────────────────── */

@@ -254,6 +254,65 @@ export const METRICS = {
     description: 'End-to-end conversion of an app session into an order.',
     cadence: '60 min',
   },
+  /* §16.4 — discovered journeys. These describe paths nobody declared, so their
+     formulas are stated over `fact_journey_path` rather than over FUNNEL_STEPS. */
+  journeys_discovered: {
+    id: 'journeys_discovered',
+    label: 'Journeys discovered',
+    domain: 'journey',
+    unit: 'count',
+    direction: 'neutral',
+    formula: 'distinct branches found in the session-path prefix tree above the branch threshold',
+    source: 'GA4 export (bq-ga4-journeys), fact_journey_path',
+    grain: 'window',
+    description:
+      'How many distinct routes through the app people actually took. Not a target — a count of shapes found.',
+    cadence: 'daily',
+    caveat:
+      'Sensitive to the branch threshold (20% of parent). A lower threshold finds more journeys, not more truth.',
+  },
+  journey_worst_exit_rate: {
+    id: 'journey_worst_exit_rate',
+    label: 'Worst single exit rate',
+    domain: 'journey',
+    unit: 'ratio',
+    direction: 'down_good',
+    formula: 'sessions that ended at the worst step / sessions that reached the step before it',
+    source: 'GA4 export (bq-ga4-journeys), fact_journey_path',
+    grain: 'window',
+    description:
+      'The largest share of sessions to leave the app outright at one step of the highest-impact discovered journey.',
+    cadence: 'daily',
+    caveat:
+      'Exits only. `1 − retention` would be larger and would count sessions that forked to another route as losses, which they are not — the finding on the page uses this same basis so the two cannot disagree.',
+  },
+  journey_sessions_at_risk: {
+    id: 'journey_sessions_at_risk',
+    label: 'Sessions lost at worst steps',
+    domain: 'journey',
+    unit: 'count',
+    direction: 'down_good',
+    formula: 'Σ over discovered journeys of sessions lost at that journey’s worst step',
+    source: 'GA4 export (bq-ga4-journeys), fact_journey_path',
+    grain: 'window',
+    description: 'The size of the problem, added up across every journey found.',
+    cadence: 'daily',
+    caveat:
+      'Journeys can share a prefix, so a session lost early may be counted on two journeys. This is an upper bound, not a sum of distinct sessions.',
+  },
+  journey_path_coverage: {
+    id: 'journey_path_coverage',
+    label: 'Path coverage',
+    domain: 'journey',
+    unit: 'ratio',
+    direction: 'up_good',
+    formula: '(sessions on stored paths) / (all sessions, including the (other) bucket)',
+    source: 'GA4 export (bq-ga4-journeys), fact_journey_path',
+    grain: 'window',
+    description:
+      'What share of sessions took a path common enough to be stored individually. The remainder is real traffic on rare paths, not missing data.',
+    cadence: 'daily',
+  },
   time_to_order_p50: {
     id: 'time_to_order_p50',
     label: 'Median scan→purchase time',

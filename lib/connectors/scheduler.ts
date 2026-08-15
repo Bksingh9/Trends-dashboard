@@ -37,7 +37,11 @@ import { applyStoredSources } from '@/lib/credentials/apply';
  */
 export const WINDOW_DAYS: Record<string, number> = {
   'bq-orders': 2, // 60-min incremental covering today and yesterday (§15.7)
-  'bq-ga4-events': 3, // GA4 finalises daily tables up to 48h late
+  'bq-ga4-events': 3,
+  // Session paths follow the same daily export, with one extra day of overlap:
+  // a late-landing partition would otherwise leave a hole in the prefix tree,
+  // and a hole in a tree is a journey that silently stops existing.
+  'bq-ga4-journeys': 4, // GA4 finalises daily tables up to 48h late
   'bq-ga4-scans': 3, // same export, same lateness
   // Wider than its inputs on purpose: the register carries an aging clock, and
   // a narrow window would drop any gap that happened not to be scanned in the
