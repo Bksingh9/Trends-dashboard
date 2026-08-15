@@ -32,8 +32,29 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className={`${archivo.variable} ${interTight.variable} ${plexMono.variable} antialiased`}>
+    /*
+     * §10.2 — the font variables belong on <html>, not <body>.
+     *
+     * Tailwind's `@theme` emits `--font-sans: var(--font-inter-tight), …` onto
+     * `:root`, which is <html>. next/font's `.variable` classes were on <body>,
+     * one level below. Custom properties inherit downward, so at `:root` the
+     * `var(--font-inter-tight)` reference resolved to nothing and `--font-sans`
+     * collapsed to its fallback stack — which <body> then inherited, already
+     * resolved.
+     *
+     * The result was that not one custom font rendered anywhere. The visible
+     * cost was `.num`: every figure in the product is meant to be IBM Plex Mono
+     * for tabular numerals, and instead every column of orders, coverage
+     * percentages and latencies was set in a proportional system font, so the
+     * digits did not line up. §10.2 calls this the one type choice to be
+     * dogmatic about, and it had never once applied.
+     */
+    <html
+      lang="en"
+      suppressHydrationWarning
+      className={`${archivo.variable} ${interTight.variable} ${plexMono.variable}`}
+    >
+      <body className="antialiased">
         {children}
       </body>
     </html>
