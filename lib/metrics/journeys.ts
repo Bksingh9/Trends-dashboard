@@ -517,3 +517,44 @@ export function journeyFindings(
   const rank = { high: 0, medium: 1, low: 2 };
   return out.sort((a, b) => rank[a.severity] - rank[b.severity]);
 }
+
+/**
+ * §5.2 `time_to_order_p50` — how long a converting session actually takes.
+ *
+ * Measured only over paths that **ended in a revenue event**, because the
+ * question is how long buying takes, not how long a session lasts. Including
+ * abandoned sessions would mix two populations and produce a number describing
+ * neither — and abandoned sessions are the majority, so it would mostly measure
+ * browsing.
+ *
+ * Returns milliseconds to match the metric's declared unit, and `null` rather
+ * than `0` when nothing converted: a zero here reads as instant checkout.
+ *
+ * The input medians are per-path, so this is a weighted median of medians — an
+ * approximation, and the registry caveat says so. The true pooled median needs
+ * per-session durations, which the mart deliberately does not store.
+ */
+export function medianTimeToOrder(paths: JourneyPath[], nodes: EventNode[]): number | null {
+  const revenueEvents = new Set(nodes.filter((n) => n.revenueSessions > 0).map((n) => n.event));
+  if (revenueEvents.size === 0) return null;
+
+  const converting = paths.filter(
+    (p) =>
+      p.medianSeconds != null &&
+      p.medianSeconds > 0 &&
+      p.sessions > 0 &&
+      revenueEvents.has(p.steps[p.steps.length - 1]),
+  );
+  if (converting.length === 0) return null;
+
+  // Weighted by sessions: a path taken by 4,000 people should not count the
+  // same as one taken by six.
+  const expanded = [...converting].sort((a, b) => (a.medianSeconds ?? 0) - (b.medianSeconds ?? 0));
+  const total = expanded.reduce((sum, p) => sum + p.sessions, 0);
+  let seen = 0;
+  for (const p of expanded) {
+    seen += p.sessions;
+    if (seen >= total / 2) return (p.medianSeconds ?? 0) * 1000;
+  }
+  return (expanded[expanded.length - 1].medianSeconds ?? 0) * 1000;
+}

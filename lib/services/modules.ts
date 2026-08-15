@@ -29,6 +29,7 @@ import {
   compareJourneys,
   discoverJourneys,
   journeyFindings,
+  medianTimeToOrder,
   type DiscoveredJourney,
   type JourneyFinding,
   type JourneyShift,
@@ -307,6 +308,11 @@ export async function journeyModule(input: ModuleInput = trailingWindow(28)): Pr
   const prevSteps = aggregateFunnel(prevFunnel.rows);
   const meta = { state: funnel.state, fetchedAt: funnel.fetchedAt };
 
+  // Session paths, for the one funnel metric a daily aggregate cannot produce.
+  const journeyPaths = await getJourneyPaths(w);
+  const nodes = await getEventNodes(w);
+  const timeToOrderMs = medianTimeToOrder(journeyPaths.rows, nodes.rows);
+
   const kpis: MetricValue[] = [
     metricValue('scan_success_rate', journey.scanSuccessRate(steps), {
       ...meta,
@@ -328,13 +334,21 @@ export async function journeyModule(input: ModuleInput = trailingWindow(28)): Pr
       ...meta,
       deltaPp: ppDelta(journey.sessionConversion(steps), journey.sessionConversion(prevSteps)),
     }),
-    // Needs per-session event sequencing, which fact_funnel_daily does not carry
-    // — it is a daily aggregate. Surfaced as missing rather than omitted, so the
-    // gap is visible instead of silently absent (§16.4 session explorer).
-    metricValue('time_to_order_p50', null, {
-      state: 'missing',
-      fetchedAt: funnel.fetchedAt,
-      sourceOverride: 'requires session-level GA4 extraction — not yet wired',
+    // §16.4 — computable at last. `fact_funnel_daily` is a daily aggregate and
+    // could never answer this; `fact_journey_path` carries whole session
+    // sequences with their elapsed seconds, so the paths that actually reached
+    // a revenue event have a real duration.
+    //
+    // It stays `missing` rather than falling back to zero when no converting
+    // path exists: nobody bought, so there is no time-to-order, and a 0 ms
+    // median would read as instant checkout.
+    metricValue('time_to_order_p50', timeToOrderMs, {
+      state: timeToOrderMs == null ? 'missing' : journeyPaths.state,
+      fetchedAt: journeyPaths.fetchedAt,
+      sourceOverride:
+        timeToOrderMs == null
+          ? 'no converting session path in this window — not a zero'
+          : `${journeyPaths.source} — median across paths ending in a revenue event`,
     }),
   ];
 
@@ -494,6 +508,15 @@ function worstExitRate(j: DiscoveredJourney | undefined): number | null {
 
 export interface StoresData {
   rows: StoreRollup[];
+  /**
+   * §4.4 — coordinates, kept beside the rollup rather than inside it.
+   *
+   * `StoreRollup` is the shape every metric in `lib/metrics/compute` is
+   * computed over, and latitude is not a metric input. Adding it there would
+   * put a presentation concern into the arithmetic layer that §5 keeps clean.
+   * Null lat/lon is preserved so the map can say how many stores it left off.
+   */
+  geo: Array<{ storeId: string; lat: number | null; lon: number | null }>;
   states: ReturnType<typeof rollupStates>;
   darkWorklist: StoreRollup[];
   ops: Map<string, { qrVmPlaced: boolean | null; staffTrained: boolean | null; footfallDaily: number | null; nocOwner: string | null }>;
@@ -610,6 +633,14 @@ export async function storesModule(input: ModuleInput = trailingWindow(28)): Pro
       rows,
       states,
       darkWorklist,
+      // A 0,0 coordinate is the Atlantic, not a store — it is what a null
+      // became upstream, and it is normalised to null here so the map can
+      // report it as missing rather than plot a phantom off West Africa.
+      geo: stores.rows.map((s) => ({
+        storeId: s.storeId,
+        lat: s.lat && s.lon ? s.lat : null,
+        lon: s.lat && s.lon ? s.lon : null,
+      })),
       ops: new Map(ops.rows.map((o) => [o.storeId, o])),
       cohort,
     },

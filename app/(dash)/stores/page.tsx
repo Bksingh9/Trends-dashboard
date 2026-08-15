@@ -8,6 +8,7 @@
 import { storesModule } from '@/lib/services/modules';
 import { KpiStrip } from '@/components/kpi/KpiCard';
 import { Column, DataTable, ModuleHeader } from '@/components/table/DataTable';
+import { DarkClusterNote, StoreMap, type StorePoint } from '@/components/charts/StoreMap';
 import { FilterBar } from '@/components/filters/FilterBar';
 import { getFilterOptions } from '@/lib/services/filter-options';
 import { formatCount, formatINR, formatPct } from '@/lib/format/currency';
@@ -35,6 +36,23 @@ export default async function StoresPage({ searchParams }: { searchParams: Promi
         —
       </span>
     );
+
+  // Joined here rather than in the module: `StoreRollup` is what every §5
+  // metric is computed over, and a coordinate is not a metric input.
+  const geoById = new Map(mod.data.geo.map((g) => [g.storeId, g]));
+  const points: StorePoint[] = mod.data.rows.map((r) => ({
+    storeId: r.storeId,
+    storeCode: r.storeCode,
+    storeName: r.storeName,
+    city: r.city,
+    state: r.state,
+    lat: geoById.get(r.storeId)?.lat ?? null,
+    lon: geoById.get(r.storeId)?.lon ?? null,
+    orders28d: r.orders28d,
+    revenue28d: r.revenue28d,
+    isDark: r.isDark,
+    daysSinceLastOrder: r.daysSinceLastOrder,
+  }));
 
   const storeCols: Column<StoreRollup>[] = [
     { key: 'code', header: 'Code', numeric: true, width: '5rem', render: (r) => r.storeCode },
@@ -161,6 +179,24 @@ export default async function StoresPage({ searchParams }: { searchParams: Promi
       <FilterBar window={mod.window} stores={options.stores} cities={options.cities} states={options.states} />
 
       <KpiStrip metrics={mod.kpis} />
+
+      {/* §4.4 — the geography. A dark store on a list is a row; a dark cluster
+          on a chart is a regional problem, and the two read completely
+          differently to somebody deciding where to send a field visit. */}
+      <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+        <StoreMap stores={points} />
+        <div className="space-y-4">
+          <DarkClusterNote stores={points} />
+          <DataTable
+            caption="Dark stores — no Companion order recently"
+            columns={darkCols}
+            rows={mod.data.darkWorklist}
+            rowKey={(r) => r.storeId}
+            sourceNote="fact_orders × dim_store"
+            maxHeight={520}
+          />
+        </div>
+      </div>
 
       <div className="grid gap-4 xl:grid-cols-[2fr_1fr]">
         <DataTable

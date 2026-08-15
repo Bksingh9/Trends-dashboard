@@ -319,11 +319,13 @@ export const METRICS = {
     domain: 'journey',
     unit: 'ms',
     direction: 'down_good',
-    formula: 'median of per-session (first scan → purchase)',
-    source: 'GA4 export (bq-ga4-events)',
-    grain: 'day',
-    description: 'How long the journey takes. Slow steps are as much a problem as failed ones.',
-    cadence: '60 min',
+    formula: 'weighted median of per-path elapsed time, over paths ending in a revenue event',
+    source: 'GA4 export (bq-ga4-journeys), fact_journey_path',
+    grain: 'window',
+    description: 'How long buying actually takes. Slow steps are as much a problem as failed ones.',
+    cadence: 'daily',
+    caveat:
+      'Median of per-path medians, weighted by sessions — an approximation. The true pooled median needs per-session durations, which fact_journey_path deliberately does not store. Measured only over paths ending in a revenue event: including abandoned sessions would mostly measure browsing.',
   },
 
   /* ── §5.3 Store adoption ───────────────────────────────────────────── */

@@ -243,8 +243,11 @@ export async function getStores(): Promise<Sourced<FixtureStore[]>> {
         tenant: r.tenant,
         companionLive: r.companionLive,
         activatedOn: r.activatedOn,
-        lat: Number(r.lat ?? 0),
-        lon: Number(r.lon ?? 0),
+        // Null must survive as null. Coercing a missing coordinate to 0 puts
+        // the store in the Atlantic, and §4.4's map would plot a phantom
+        // instead of reporting that the store master has no location for it.
+        lat: r.lat == null ? null : Number(r.lat),
+        lon: r.lon == null ? null : Number(r.lon),
       }));
     },
     'dim_store (sheets-store-master)',

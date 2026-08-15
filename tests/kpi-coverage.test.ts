@@ -65,12 +65,40 @@ describe('metrics with no feed are shown as missing, not omitted or zeroed', () 
   it.each([
     ['true_coverage', 'SAP + RRA feeds are deferred (§13.9)'],
     ['geofence_delivery_rate', 'no backend feed yet'],
-    ['time_to_order_p50', 'needs session-level GA4 extraction'],
   ])('%s renders as missing with a null value', (id) => {
     const k = emitted.get(id)!;
     expect(k.state).toBe('missing');
     // Zero would read as "the thing is broken"; null reads as "we do not know".
     expect(k.value).toBeNull();
+  });
+
+  it('time_to_order_p50 has a feed now, and is no longer missing', () => {
+    // It was on the list above until `fact_journey_path` existed. A daily
+    // aggregate could never answer it; whole session paths can, so the honest
+    // state changed and this test changed with it rather than the metric being
+    // left permanently grey.
+    const k = emitted.get('time_to_order_p50')!;
+    expect(k.state).not.toBe('missing');
+    expect(k.value).not.toBeNull();
+    expect(k.value).toBeGreaterThan(0);
+    // Either the mart or its fixture, depending on whether a database is
+    // configured for the test run — both are the session-path source, and
+    // requiring the mart would make this a test of the environment.
+    expect(k.source).toMatch(/fact_journey_path|GA4 session paths/);
+  });
+
+  it('falls back to missing rather than zero when nothing converted', async () => {
+    // The guard that keeps the change above honest: a window with no purchase
+    // has no time-to-order, and a 0 ms median would read as instant checkout.
+    const { medianTimeToOrder } = await import('@/lib/metrics/journeys');
+    expect(medianTimeToOrder([], [])).toBeNull();
+    expect(
+      medianTimeToOrder(
+        [{ steps: ['a', 'b'], sessions: 10, convertedSessions: 0, revenue: 0, medianSeconds: 90 }],
+        [{ event: 'b', sessions: 10, events: 10, revenueSessions: 0, revenue: 0 }],
+      ),
+      'a path that never carried revenue is not a purchase journey',
+    ).toBeNull();
   });
 });
 

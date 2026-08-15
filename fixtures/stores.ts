@@ -18,8 +18,12 @@ export interface FixtureStore {
   tenant: string;
   companionLive: boolean;
   activatedOn: string | null;
-  lat: number;
-  lon: number;
+  /**
+   * Null where the store master has no location. §4.4's map reports those
+   * rather than plotting them at 0,0 — which is the Atlantic, not Gujarat.
+   */
+  lat: number | null;
+  lon: number | null;
 }
 
 const CITIES: Array<[string, string, string, number, number]> = [
