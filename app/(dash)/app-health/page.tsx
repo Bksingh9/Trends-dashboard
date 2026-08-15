@@ -10,6 +10,8 @@ import { CRITICAL_ENDPOINTS } from '@/lib/db/settings';
 import { isBreaching, isOverPlaceholder } from '@/lib/connectors/api-latency';
 import { cn } from '@/lib/cn';
 
+import { HelpSupportAnalytics } from '@/components/analytics/HelpSupport';
+
 export const dynamic = 'force-dynamic';
 
 export default async function AppHealthPage({ searchParams }: { searchParams: Promise<RawParams> }) {
@@ -213,6 +215,11 @@ export default async function AppHealthPage({ searchParams }: { searchParams: Pr
         sourceNote={`${mod.sources[1]} — SLOs are placeholders until confirmed (§13.7, A10); breach alerting is gated behind slo_confirmed`}
         maxHeight={300}
       />
+      {/* §4.11 — Companion's help surface, straight from the GA4 Data API.
+          It lives here rather than on /journey because a spike in help taps is
+          a health signal: people ask for help when something is broken. */}
+      <HelpSupportAnalytics />
+
     </div>
   );
 }

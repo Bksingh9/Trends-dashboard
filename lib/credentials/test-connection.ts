@@ -249,6 +249,77 @@ async function testSheets(v: Record<string, string>): Promise<TestResult> {
     : fail(`Could not read the sheet. Share it with ${email} as Viewer.`, steps);
 }
 
+/**
+ * GA4, through the Data API.
+ *
+ * This used to reuse `testSheets` with a note that it was "the same auth hop".
+ * It is the same *token* exchange and nothing else: `testSheets` reads
+ * `v.storeMasterId`, which a GA4 source does not have, so the probe fetched
+ * `/spreadsheets/undefined` and the result described a spreadsheet nobody had
+ * configured. A test that passes for the wrong reason is worse than none.
+ *
+ * The three failures here are genuinely different problems with different
+ * owners, and the message says which: the API not being enabled is a console
+ * click, the property not being shared is an Analytics admin task, and a bad
+ * key is a credential rotation.
+ */
+async function testGa4(v: Record<string, string>): Promise<TestResult> {
+  const steps: TestResult['steps'] = [];
+  const findings: string[] = [];
+
+  let email = '';
+  const parsedOk = await step(steps, 'Service-account key parses', async () => {
+    email = (JSON.parse(v.serviceAccountJson) as { client_email?: string }).client_email ?? '';
+    if (!email) throw new Error('No client_email in the key');
+    return email;
+  });
+  if (!parsedOk) return fail('The key could not be read as JSON.', steps);
+
+  const ok = await step(steps, `runReport on property ${v.propertyId}`, async () => {
+    const { getAccessToken } = await import('@/lib/gcp/auth');
+    const token = await getAccessTokenWith(v.serviceAccountJson, getAccessToken, [
+      'https://www.googleapis.com/auth/analytics.readonly',
+    ]);
+    const res = await fetchWithTimeout(
+      `https://analyticsdata.googleapis.com/v1beta/properties/${encodeURIComponent(v.propertyId)}:runReport`,
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dateRanges: [{ startDate: '7daysAgo', endDate: 'yesterday' }],
+          metrics: [{ name: 'sessions' }],
+          limit: 1,
+        }),
+      },
+    );
+    const text = await res.text();
+    if (res.status === 403 && text.includes('has not been used in project')) {
+      throw new Error(
+        'the Analytics Data API is not enabled on this service account\'s project — enable it in the Google Cloud console, then retry',
+      );
+    }
+    if (res.status === 403) throw new Error(`${email} has no access to this property — add it as a Viewer in GA4 Admin`);
+    if (res.status === 404) throw new Error(`no property ${v.propertyId} — check the numeric id, not the measurement id`);
+    if (!res.ok) throw new Error(`HTTP ${res.status} — ${text.slice(0, 160)}`);
+
+    const body = JSON.parse(text) as { rows?: Array<{ metricValues?: Array<{ value?: string }> }> };
+    const sessions = body.rows?.[0]?.metricValues?.[0]?.value;
+    findings.push(
+      sessions
+        ? `${Number(sessions).toLocaleString('en-IN')} sessions in the last 7 days`
+        : 'The property is readable but reported no sessions in the last 7 days.',
+    );
+    // §13.1 — the API samples and the BigQuery export does not. Saying so here
+    // stops the two being treated as interchangeable later.
+    findings.push('The Data API samples; where it disagrees with the BigQuery export, the export wins.');
+    return 'report returned';
+  });
+
+  return ok
+    ? { ok: true, summary: `Property ${v.propertyId} readable.`, steps, findings }
+    : fail('Could not read the property.', steps);
+}
+
 async function testAnthropic(v: Record<string, string>): Promise<TestResult> {
   const steps: TestResult['steps'] = [];
   const ok = await step(steps, 'One-token completion', async () => {
@@ -627,7 +698,7 @@ export const TESTS: Record<string, (v: Record<string, string>) => Promise<TestRe
   slack: testSlack,
   sentry: testSentry,
   jira: testJira,
-  ga4: testSheets, // same auth hop; the property check needs the Data API scope
+  ga4: testGa4,
   anthropic: testAnthropic,
   mysql: testMysql,
   snowflake: testSnowflake,

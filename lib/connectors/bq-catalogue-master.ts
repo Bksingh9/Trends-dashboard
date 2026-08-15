@@ -59,6 +59,49 @@ WHERE v.gtin_value IS NOT NULL
 `.trim();
 
 /**
+ * The Scan-and-Go catalogue — the EAN master, found at last.
+ *
+ * `seller_identifier` holds the barcode a customer actually scans. Reading it
+ * settles what `RBL_ITEM_SQL` could not: 6,520,345 rows, 3,408,260 distinct
+ * identifiers, of which 2,524,920 are active and match `^[0-9]{8,14}$`. The
+ * samples are real GS1 codes — 8907844327152 carries an Indian prefix,
+ * 4062452450730 is Puma's.
+ *
+ * Two deliberate choices:
+ *
+ * `gtin_type` is **derived, not asserted**. This table has no identifier-type
+ * column, and stamping every row `EAN` would push the 13% that are not
+ * barcode-shaped straight into `dim_product.ean`, where no scan could ever
+ * match them — the precise failure the ALU discovery was about. Rows that do
+ * not look like a barcode are labelled `UNVERIFIED`, which is not in
+ * `BARCODE_GTIN_TYPES`, so the existing filter excludes and counts them.
+ *
+ * De-duplication happens **in SQL**, because 6.5 M rows collapse to 3.4 M pairs
+ * and pulling the difference over the REST API buys nothing.
+ *
+ * There is no category column here. `category` is therefore null and
+ * `categoryMapped` false — which is not a shortcoming: `category_not_mapped` is
+ * one of the real §20.3 defect reasons in the Tatsu sync report, and reporting
+ * it truthfully is the point.
+ */
+export const SNG_ITEM_SQL = () => {
+  return `
+SELECT
+  item_code,
+  seller_identifier AS ean_raw,
+  IF(REGEXP_CONTAINS(seller_identifier, r'^[0-9]{8,14}$'), 'EAN', 'UNVERIFIED') AS gtin_type,
+  ANY_VALUE(product_name) AS name,
+  ANY_VALUE(brand_name)   AS brand,
+  CAST(NULL AS STRING)    AS category,
+  CAST(LOGICAL_OR(active) AS STRING) AS available
+FROM \`${config.bqSngProject}.${config.bqSngDataset}.catalog\`
+WHERE seller_identifier IS NOT NULL
+  AND item_code IS NOT NULL
+GROUP BY item_code, seller_identifier, gtin_type
+`.trim();
+};
+
+/**
  * What proportion of the catalogue is actually barcoded, by identifier type.
  *
  * Cheap, and it answers the question that decides whether this source can serve
@@ -146,27 +189,44 @@ export class BqCatalogueMasterConnector extends BaseConnector<RawItem, ProductRo
    *
    * `ITEM_SQL` targets the Orbis item table in the Companion project, which is
    * what §20.2 originally specified. `RBL_ITEM_SQL` targets the structured RBL
-   * catalogue, which is the source that actually answered — verified against
-   * production, 1.81 lakh products.
+   * catalogue, which answered — with ALUs. `SNG_ITEM_SQL` targets the
+   * Scan-and-Go catalogue, which answers with barcodes, and is preferred.
    *
    * One connector rather than two, because two connectors writing `dim_product`
    * is the double-write the concurrency guard cannot help with: both would
    * produce valid rows and the result would reconcile against nothing. The
    * source used is recorded on the run so provenance is never ambiguous.
    */
-  private sourceSql(): { sql: string; source: 'rbl' | 'orbis' } {
+  /** Recorded on the run, so which upstream produced the mart is never a guess. */
+  private sourceSql(): { sql: string; source: 'sng' | 'rbl' | 'orbis' } {
+    // SNG first: it is the only one of the three whose identifiers are barcodes
+    // a customer can scan. RBL answers, and answers with ALUs.
+    if (config.bqSngProject && config.bqSngDataset) {
+      return { sql: SNG_ITEM_SQL(), source: 'sng' };
+    }
     if (config.bqCatalogueProject && config.bqCatalogueDataset) {
       return { sql: RBL_ITEM_SQL(), source: 'rbl' };
     }
     return { sql: ITEM_SQL, source: 'orbis' };
   }
 
+  /** Set when the last extract hit `BQ_CATALOGUE_MAX_ROWS`, for `transform` to publish. */
+  private lastTruncated = false;
+
   protected async extract(): Promise<RawItem[]> {
     const { sql, source } = this.sourceSql();
-    const res = await runQuery<RawItem>({ query: sql, // BigQuery labels allow only lowercase letters, digits, hyphens and
+    const res = await runQuery<RawItem>({
+      query: sql,
+      // BigQuery labels allow only lowercase letters, digits, hyphens and
       // underscores — a colon here is rejected outright, which the live API
       // catches and no amount of local review would have.
-      connector: `${this.id}-${source}` });
+      connector: `${this.id}-${source}`,
+      // The cap is applied to the *read*, not in SQL, so `truncated` comes from
+      // BigQuery still having pages rather than from the row count — a query
+      // returning exactly the cap and one truncated at it look identical.
+      maxRows: config.bqCatalogueMaxRows,
+    });
+    this.lastTruncated = res.truncated;
     return res.rows;
   }
 
@@ -187,6 +247,17 @@ export class BqCatalogueMasterConnector extends BaseConnector<RawItem, ProductRo
    * than as a quietly shorter load.
    */
   protected transform(rows: RawItem[]): ProductRow[] {
+    // A truncated master is published as truncated. Without this line every EAN
+    // past the cap classifies as `absent_from_master` — the most alarming
+    // reason in §20.3, and entirely an artefact of the read.
+    if (this.lastTruncated) {
+      console.warn(
+        `[${this.id}] PARTIAL CATALOGUE — the read stopped at BQ_CATALOGUE_MAX_ROWS=` +
+          `${config.bqCatalogueMaxRows.toLocaleString('en-IN')} and BigQuery had more pages. ` +
+          'Every EAN beyond that point classifies as absent from the master. ' +
+          'Raise the cap before trusting a coverage figure.',
+      );
+    }
     const byKey = new Map<string, ProductRow>();
     const nonBarcodeTypes = new Map<string, number>();
     let duplicateKeys = 0;

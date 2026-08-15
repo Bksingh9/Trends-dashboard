@@ -24,16 +24,35 @@ interface ServiceAccountKey {
   project_id?: string;
 }
 
+/**
+ * Cached against the raw credential, not merely "cached".
+ *
+ * `config` is built once at import from `process.env`, so a key that arrives
+ * later — which is exactly what "Test connection" does, by setting
+ * `GCP_SA_KEY_JSON` for the length of one call — was invisible. Every GCP
+ * connection test failed with "GCP_SA_KEY_JSON not configured", including the
+ * ones holding a perfectly good key, and the message blamed the credential.
+ *
+ * Reading `process.env` first and keying the cache on the value fixes both: a
+ * new key is picked up, and an unchanged one is still parsed once.
+ */
 let cachedKey: ServiceAccountKey | null | undefined;
+let cachedFrom: string | undefined;
+
+function rawKeyJson(): string {
+  return (process.env.GCP_SA_KEY_JSON ?? config.gcpSaKeyJson ?? '').trim();
+}
 
 export function serviceAccountKey(): ServiceAccountKey | null {
-  if (cachedKey !== undefined) return cachedKey;
-  if (!config.gcpSaKeyJson) {
+  const rawInput = rawKeyJson();
+  if (cachedKey !== undefined && cachedFrom === rawInput) return cachedKey;
+  cachedFrom = rawInput;
+  if (!rawInput) {
     cachedKey = null;
     return null;
   }
   try {
-    const raw = config.gcpSaKeyJson.trim();
+    const raw = rawInput;
     // Accept either raw JSON or base64, so a paste-in-Vercel mistake is survivable.
     const json = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
     const parsed = JSON.parse(json) as ServiceAccountKey;
@@ -48,7 +67,15 @@ export function isGcpConfigured(): boolean {
   return serviceAccountKey() !== null;
 }
 
-let tokenCache: { token: string; expiresAt: number } | null = null;
+/**
+ * Keyed by account **and** scopes.
+ *
+ * A single global token cache returns whichever token was fetched first. Test
+ * one service account, then another, and the second reports "connected" on the
+ * first one's token — a credential that was never checked, reported as working.
+ * With two projects and two keys in play that is not hypothetical.
+ */
+const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
 function b64url(input: string | Buffer): string {
   return Buffer.from(input).toString('base64url');
@@ -56,10 +83,12 @@ function b64url(input: string | Buffer): string {
 
 /** Exchanges a signed JWT for an OAuth access token. Cached until ~1 min before expiry. */
 export async function getAccessToken(scopes: readonly string[] = GCP_SCOPES): Promise<string> {
-  if (tokenCache && tokenCache.expiresAt > Date.now() + 60_000) return tokenCache.token;
-
   const key = serviceAccountKey();
   if (!key) throw new Error('GCP_SA_KEY_JSON not configured — see §13.2');
+
+  const cacheKey = `${key.client_email}|${[...scopes].sort().join(' ')}`;
+  const hit = tokenCache.get(cacheKey);
+  if (hit && hit.expiresAt > Date.now() + 60_000) return hit.token;
 
   const now = Math.floor(Date.now() / 1000);
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
@@ -89,11 +118,12 @@ export async function getAccessToken(scopes: readonly string[] = GCP_SCOPES): Pr
     throw new Error(`GCP token exchange failed: ${res.status} ${await res.text()}`);
   }
   const body = (await res.json()) as { access_token: string; expires_in: number };
-  tokenCache = { token: body.access_token, expiresAt: Date.now() + body.expires_in * 1000 };
+  tokenCache.set(cacheKey, { token: body.access_token, expiresAt: Date.now() + body.expires_in * 1000 });
   return body.access_token;
 }
 
 export function resetTokenCache(): void {
-  tokenCache = null;
+  tokenCache.clear();
   cachedKey = undefined;
+  cachedFrom = undefined;
 }

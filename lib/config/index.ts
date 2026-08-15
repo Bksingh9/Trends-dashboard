@@ -42,6 +42,29 @@ export const config = {
   bqCatalogueProject: env('BQ_CATALOGUE_PROJECT', 'fynd-jio-impetus-prod'),
   bqCatalogueDataset: env('BQ_CATALOGUE_DATASET', 'rbl_catalog_structured_v7'),
   bqItemTable: env('BQ_ITEM_TABLE', 'sng-prod.orbis_pipe_dwh.item'),
+  /**
+   * The Scan-and-Go catalogue — the EAN master this build spent a long time
+   * looking for.
+   *
+   * `rbl_catalog_structured_v7` was the best candidate until it was actually
+   * read: 49,955 of 50,000 sampled rows carried `gtin_type = 'ALU'`, Reliance's
+   * internal Article Level Unit code, which no customer can scan.
+   * `analytics_boltic_sng.catalog` carries `seller_identifier`, and a sample
+   * shows real GS1 barcodes — 8907844327152 (an Indian prefix), 4062452450730
+   * (Puma). 6.52 M rows, 2.52 M distinct active barcoded EANs.
+   *
+   * Preferred over the RBL path when set, because a master of internal codes
+   * cannot answer "was this scanned barcode in the catalogue".
+   */
+  bqSngProject: env('BQ_SNG_PROJECT', 'fynd-jio-impetus-prod'),
+  bqSngDataset: env('BQ_SNG_DATASET', 'analytics_boltic_sng'),
+  /**
+   * A ceiling on the catalogue load, for environments that cannot hold 2.5 M
+   * rows. `0` means no cap. When a cap truncates the master, the run records it
+   * and the mart is served with the truncation stated — a silently short
+   * catalogue would make every unlisted EAN look like a genuine gap (§20.3).
+   */
+  bqCatalogueMaxRows: Number(env('BQ_CATALOGUE_MAX_ROWS', '0')),
   /** §13.1 — UNKNOWN. Blocks Phase 3. Resolve with the SCHEMATA query in §16.1. */
   bqGa4Project: env('BQ_GA4_PROJECT'),
   /** §13.1 — UNKNOWN. GA4 default naming would be `analytics_524294430`. Do not assume. */
