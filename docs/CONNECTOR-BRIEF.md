@@ -204,6 +204,11 @@ Do:
 
 ## S-6 · Kaily — establish relevance first
 
+> Full task prompt: **`docs/KAILY-BRIEF.md`**. Reference surface:
+> `console.fynd.com/kaily/asia-south1/accounts/048572c4-…/insights` — which is
+> egress-blocked from the build container, so everything known about the API is
+> read off the URL and off Slack, not verified.
+
 Kaily is Fynd's AI agent platform (`@kaily-ai/chat-sdk`; agents, threads, tool
 calls, an email surface on `inbox.kaily.fyndmail.com`; CoPilot product line).
 
