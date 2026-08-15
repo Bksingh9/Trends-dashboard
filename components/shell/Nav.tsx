@@ -22,6 +22,9 @@ export interface NavItem {
 
 export const NAV: NavItem[] = [
   { href: '/', label: 'Hub', hint: 'Is Companion healthy today', group: 'domains' },
+  // §4.10 — the wall display. First after the hub because that is where it is
+  // used from: a screen on the NOC floor, not a page anybody navigates to.
+  { href: '/board', label: 'Board', hint: 'Wall display you can build', group: 'domains' },
   { href: '/sales', label: 'Sales', hint: 'Orders, GMV, AOV, customers', group: 'domains' },
   { href: '/journey', label: 'Journey', hint: 'Scan → bag → pay → de-tag', group: 'domains' },
   // §16.4 — the same domain read the other way round: paths found in the data

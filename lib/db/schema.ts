@@ -509,6 +509,33 @@ export const aiInsight = pgTable('ai_insight', {
  * §12 — Thresholds and SLOs live in the database, not in env, so ops can tune
  * them without a deploy.
  */
+/**
+ * §4.10 — a saved board layout.
+ *
+ * Kept in the database rather than in a config file for the same reason
+ * `data_source` is: the person who wants a tile on the NOC wall is not the
+ * person who can deploy. `board` is a name, so a NOC board and a leadership
+ * board are two rows sets rather than two builds.
+ */
+export const dashboardWidget = pgTable(
+  'dashboard_widget',
+  {
+    widgetId: text('widget_id').primaryKey(),
+    board: text('board').notNull().default('default'),
+    kind: text('kind').notNull(),
+    /** Exactly one of these is set; the other is null. */
+    metricId: text('metric_id'),
+    seriesId: text('series_id'),
+    title: text('title'),
+    /** Null means "use the threshold from app_setting", not "no target". */
+    target: numeric('target', { precision: 16, scale: 4 }),
+    size: text('size').notNull().default('sm'),
+    position: integer('position').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('dashboard_widget_board_idx').on(t.board, t.position)],
+);
+
 export const appSetting = pgTable('app_setting', {
   key: text('key').primaryKey(),
   value: jsonb('value').notNull(),

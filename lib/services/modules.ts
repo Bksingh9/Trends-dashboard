@@ -931,7 +931,13 @@ export async function appHealthModule(input: ModuleInput = trailingWindow(28)): 
 
 /* ── /issues ─────────────────────────────────────────────────────────────── */
 
-export async function issuesModule(): Promise<ModuleResult<{ rows: Awaited<ReturnType<typeof getIssues>>['rows']; byWorkstream: Array<{ workstream: string; open: number; p0: number }>; byJourneyStep: Array<{ step: string; count: number }> }>> {
+export interface IssuesData {
+  rows: Awaited<ReturnType<typeof getIssues>>['rows'];
+  byWorkstream: Array<{ workstream: string; open: number; p0: number }>;
+  byJourneyStep: Array<{ step: string; count: number }>;
+}
+
+export async function issuesModule(): Promise<ModuleResult<IssuesData>> {
   const issues = await getIssues();
   const meta = { state: issues.state, fetchedAt: issues.fetchedAt, sourceOverride: issues.source };
 
