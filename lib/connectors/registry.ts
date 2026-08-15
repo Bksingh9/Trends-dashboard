@@ -15,6 +15,7 @@ import type { BaseConnector } from './base';
 
 import { sheetsStoreMaster } from './sheets-store-master';
 import { slackCatalogueReport } from './slack-catalogue-report';
+import { slackCatalogueSyncReport } from './slack-catalogue-sync-report';
 import { bqOrders } from './bq-orders';
 import { bqGa4Events } from './bq-ga4-events';
 import { bqGa4Scans } from './bq-ga4-scans';
@@ -36,6 +37,10 @@ import { bqLoyalty } from './bq-loyalty';
 export const CONNECTORS: BaseConnector<any, any>[] = [
   sheetsStoreMaster,
   slackCatalogueReport,
+  // The defect half of the same hourly report. Separate because the grain
+  // differs — one row a day versus one per (report, pipeline, error) — and one
+  // connector is one row type.
+  slackCatalogueSyncReport,
   bqOrders,
   bqGa4Events,
   // The scan half of the same GA4 export. Separate because the grain differs

@@ -81,6 +81,23 @@ export const config = {
   slackAlertsChannel: env('SLACK_ALERTS_CHANNEL', 'C0B0APYNZTQ'),
   slackNocChannel: env('SLACK_NOC_CHANNEL', 'C0BFJQDV05N'),
   slackDigestChannel: env('SLACK_DIGEST_CHANNEL'),
+  /**
+   * Incoming webhook, used when the bot token lacks `chat:write`.
+   *
+   * A webhook posts to exactly one channel chosen when it was created, so it
+   * cannot replace `chat:write` — it can only keep alerting alive while the
+   * reinstall is pending. Every post through it is labelled as such, because an
+   * alert that silently went somewhere other than where it was addressed is
+   * worse than one that failed loudly.
+   */
+  slackWebhookUrl: env('SLACK_WEBHOOK_URL'),
+  /**
+   * A directory of exported Slack JSON, read when the API refuses.
+   *
+   * A temporary bridge while `channels:history` is pending workspace approval.
+   * Anything served from it is `cache`, never `live` — see slack-snapshot.ts.
+   */
+  slackSnapshotDir: env('SLACK_SNAPSHOT_DIR'),
 
   // Sentry (§21)
   sentryOrg: env('SENTRY_ORG', 'fynd-f7'),

@@ -545,6 +545,35 @@ export const appSetting = pgTable('app_setting', {
 });
 
 /** §5.5 — gap reason taxonomy, config-driven rather than hard-coded. */
+/**
+ * §18.5 / §20.3 — the defect table from the hourly Tatsu sync report.
+ *
+ * `fact_catalogue_daily` carries the coverage headline, one row a day. This
+ * carries the reasons underneath it: one row per (report, pipeline, direction,
+ * error type). The difference is "94% coverage" versus "2,742 SKUs failed
+ * outbound because an EAN is already assigned to another item code" — a slide
+ * number against a work queue.
+ */
+export const factCatalogueDefect = pgTable(
+  'fact_catalogue_defect',
+  {
+    reportDate: date('report_date').notNull(),
+    /** The bot posts hourly; each report is its own row, not an overwrite. */
+    reportedAt: timestamp('reported_at', { withTimezone: true }).notNull(),
+    pipeline: text('pipeline').notNull(),
+    direction: text('direction').notNull(), // inbound | outbound
+    errorType: text('error_type').notNull(),
+    count: integer('count').notNull(),
+    /** Null where the bot's error string maps to no §20.3 reason yet. */
+    gapReason: text('gap_reason'),
+  },
+  (t) => [
+    primaryKey({ columns: [t.reportDate, t.reportedAt, t.pipeline, t.direction, t.errorType] }),
+    index('fact_catalogue_defect_date_idx').on(t.reportDate),
+    index('fact_catalogue_defect_reason_idx').on(t.gapReason),
+  ],
+);
+
 export const dimGapReason = pgTable('dim_gap_reason', {
   reason: text('reason').primaryKey(),
   label: text('label').notNull(),
@@ -554,6 +583,7 @@ export const dimGapReason = pgTable('dim_gap_reason', {
 });
 
 export const schema = {
+  factCatalogueDefect,
   dimStore,
   dimProduct,
   dimDate,

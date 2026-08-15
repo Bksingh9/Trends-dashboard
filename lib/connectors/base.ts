@@ -114,8 +114,14 @@ export abstract class BaseConnector<TRow, TNormalised = TRow> {
       return {
         ok: true,
         rows,
-        meta: this.meta(w, loaded.rowsIngested, 'live', [
+        // `readSource` lets a connector that fell back to a local bridge report
+        // `cache` instead of `live`. A successful extract is not the same claim
+        // as a live one, and a snapshot reported as live is exactly the failure
+        // §14.5 exists to prevent — worse here than a fixture, because it looks
+        // like a working feed.
+        meta: this.meta(w, loaded.rowsIngested, this.readSource(), [
           ...warnings,
+          ...this.readWarnings(),
           ...verdicts.filter((v) => v.level === 'warn').map((v) => v.message),
         ]),
         assertions: verdicts,
@@ -225,6 +231,19 @@ export abstract class BaseConnector<TRow, TNormalised = TRow> {
       rows,
       meta: this.meta(w, rows.length, 'fixture', [`Fixture data — ${reason}`]),
     };
+  }
+
+  /**
+   * What the last `extract()` actually read from. Overridden by connectors with
+   * a fallback path; `live` for everything else.
+   */
+  protected readSource(): 'live' | 'cache' {
+    return 'live';
+  }
+
+  /** Warnings the read path wants on the run, e.g. which snapshot was used. */
+  protected readWarnings(): string[] {
+    return [];
   }
 
   protected meta(
