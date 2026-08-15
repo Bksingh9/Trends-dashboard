@@ -72,3 +72,69 @@ separate decision from "make Loyalty visible".
 If the intent was actually a self-hosted Postgres for the serving marts rather
 than the Loyalty BigQuery project, this ADR should be superseded — that is
 `DATABASE_URL` and the §7 schema, and needs none of the above.
+
+---
+
+## Addendum — what the credential actually opened (2026-08-15)
+
+A service account for `fynd-jio-impetus-prod` arrived, and it disproves two of
+this ADR's premises.
+
+**It is not a Loyalty analytics project.** Sixteen datasets, none of them
+`analytics_*`. What it holds is catalogue: `rbl_catalog_structured_v5/v6/v7`,
+`multi_brand_catalog`, `reliance_brands_data_3year`. The connection doctor
+reports this accurately — "readable but no `analytics_* dataset found" — rather
+than claiming success. `MODULE_LOYALTY` therefore stays off: the feed it was
+written against does not exist here.
+
+**`sng-prod` is not readable with this key.** Confirmed by a 403 on
+`INFORMATION_SCHEMA`. Companion's own orders and GA4 export live there and need
+a separate grant, which is the warning this ADR opened with, now demonstrated.
+
+### The catalogue lead, and why it does not work either
+
+`rbl_catalog_structured_v7` looked like the §20.2 product master it has been
+missing: 1,81,022 products, 1,77,741 variants, with `gtin_value` and `sku`
+columns that read exactly like EAN and item code.
+
+Running it live settled it. **49,955 of the first 50,000 variant rows carry
+`gtin_type = 'ALU'`** — Reliance's internal Article Level Unit code, not a
+barcode. Only 45 rows carry a scannable identifier type, collapsing to 9 unique
+`(ean, item_code)` pairs.
+
+This matters far more than "the table was the wrong one". Had the `gtin_type`
+filter not been added, all 1.8 lakh ALUs would have been written into
+`dim_product.ean`, where **no scan could ever match one** — and §20.3 classifies
+any scanned EAN absent from the master as `absent_from_master`. The dashboard
+would have reported the entire catalogue as missing from the master: the most
+alarming reason in the taxonomy, stated with complete confidence, and a pure
+artefact of a column-name coincidence.
+
+Three defences came out of it:
+
+- `BARCODE_GTIN_TYPES` — only EAN/UPC/GTIN-family types reach the EAN column.
+  Everything else is counted by type and reported, not silently dropped.
+- The `cardinality` assertion on `ean` is now **fail**, not warn. A collapsed
+  product dimension is worse than a stale one, and §6.3 hard-fail keeps the
+  mart on its last good snapshot rather than overwriting it with nine rows.
+- `stripFloatArtefact` — `gtin_value` arrives as `410219992001.0`, having
+  passed through a FLOAT64 upstream. That trailing `.0` is why every value
+  failed check-digit validation, and it is §19.3's hazard exactly. Stripping it
+  is safe; `Number()` would not be, because it discards leading zeros.
+
+### Two other bugs only production could find
+
+- BigQuery rejects a job label containing a colon. `${this.id}:${source}` was
+  invalid and no amount of local review would have caught it.
+- The real catalogue contains duplicate `(ean, item_code)` pairs, so an
+  `ON CONFLICT DO UPDATE` batch touching one row twice failed the entire load.
+  Those duplicates *are* the §20.3 `ean_assigned_to_multiple_item_codes`
+  defect — the largest error class in the Tatsu sync report, at 2,742 of 2,935
+  outbound failures in a single hour. The loader now collapses them and
+  publishes the count as a catalogue finding.
+
+### Still open
+
+Where the real EAN master lives. `multi_brand_catalog` and the `rbl_catalog_raw_*`
+datasets are unexplored, and the Orbis item table named in §20.2 sits in
+`sng-prod`, which this key cannot reach.

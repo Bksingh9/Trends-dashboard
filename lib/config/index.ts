@@ -33,6 +33,14 @@ export const config = {
   gcpProjectId: env('GCP_PROJECT_ID', 'sng-prod'),
   gcpSaKeyJson: env('GCP_SA_KEY_JSON'),
   bqOrdersTable: env('BQ_ORDERS_TABLE', 'sng-prod.sng_analytics_dwh.avis_base_view'),
+  /**
+   * §20.2 — the RBL structured catalogue. A *different* GCP project from the
+   * Companion one, so it needs its own IAM grant (the same lesson as ADR-001).
+   * Verified reachable and populated; `sng-prod` is not readable with the same
+   * service account.
+   */
+  bqCatalogueProject: env('BQ_CATALOGUE_PROJECT', 'fynd-jio-impetus-prod'),
+  bqCatalogueDataset: env('BQ_CATALOGUE_DATASET', 'rbl_catalog_structured_v7'),
   bqItemTable: env('BQ_ITEM_TABLE', 'sng-prod.orbis_pipe_dwh.item'),
   /** §13.1 — UNKNOWN. Blocks Phase 3. Resolve with the SCHEMATA query in §16.1. */
   bqGa4Project: env('BQ_GA4_PROJECT'),
