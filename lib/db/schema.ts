@@ -387,6 +387,43 @@ export const etlRunLog = pgTable(
   (t) => [index('etl_run_log_connector_idx').on(t.connector, t.startedAt)],
 );
 
+/**
+ * §9.5 — data sources configured from the UI.
+ *
+ * The `.env` model required a redeploy to add a credential, which meant a NOC
+ * lead handed a Slack token could do nothing with it without a developer. This
+ * is the table behind "Add a data source".
+ *
+ * `config` holds the non-secret settings — project ids, channel ids, dataset
+ * names — as plain JSON, because they are useful to read in a psql prompt when
+ * something is wrong. `secrets` holds AES-256-GCM ciphertext, one entry per
+ * secret field, and nothing decrypts it but the app. `secretPreview` is the
+ * masked form the UI is allowed to show; the plaintext is never sent back to a
+ * browser under any circumstance.
+ */
+export const dataSource = pgTable(
+  'data_source',
+  {
+    sourceId: bigserial('source_id', { mode: 'number' }).primaryKey(),
+    /** A `SOURCE_TYPES` id — bigquery, slack, postgres… */
+    type: text('type').notNull(),
+    /** What a human called it. Two BigQuery projects need two names. */
+    name: text('name').notNull(),
+    config: jsonb('config').notNull().default({}),
+    secrets: jsonb('secrets').notNull().default({}),
+    secretPreview: jsonb('secret_preview').notNull().default({}),
+    /** Disabled sources keep their credentials but are skipped by the scheduler. */
+    enabled: boolean('enabled').notNull().default(true),
+    lastTestedAt: timestamp('last_tested_at', { withTimezone: true }),
+    lastTestOk: boolean('last_test_ok'),
+    lastTestDetail: text('last_test_detail'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [unique('data_source_type_name_key').on(t.type, t.name)],
+);
+
 export const aiInsight = pgTable('ai_insight', {
   insightId: bigserial('insight_id', { mode: 'number' }).primaryKey(),
   generatedAt: timestamp('generated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -446,6 +483,7 @@ export const schema = {
   factIssues,
   factStoreVisitAudit,
   etlRunLog,
+  dataSource,
   aiInsight,
   appSetting,
 };

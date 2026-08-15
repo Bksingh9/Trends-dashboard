@@ -32,6 +32,7 @@ export const NAV: NavItem[] = [
   { href: '/loyalty', label: 'Loyalty', hint: 'Reliance One 2.0', group: 'domains', flag: 'loyalty' },
   { href: '/insights', label: 'AI Insights', hint: 'Brief, anomalies, ask the data', group: 'intelligence' },
   { href: '/connectors', label: 'Connectors', hint: 'Status, lineage, run log', group: 'system' },
+  { href: '/connectors/sources', label: 'Data sources', hint: 'Add or change a connection', group: 'system' },
   { href: '/reference', label: 'Reference', hint: 'Deep links, test EANs, docs', group: 'system' },
   { href: '/settings', label: 'Settings', hint: 'Thresholds, SLOs, flags', group: 'system' },
 ];

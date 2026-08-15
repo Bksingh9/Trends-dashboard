@@ -5,6 +5,7 @@
  * most. Exits non-zero only when a credential is present but broken; a merely
  * unconfigured connector is not a failure, it is a known blocker.
  */
+import { applyStoredSources } from '../lib/credentials/apply';
 import { runDoctor, type Check } from '../lib/connectors/doctor';
 
 const ICON: Record<Check['status'], string> = {
@@ -15,6 +16,7 @@ const ICON: Record<Check['status'], string> = {
 };
 
 async function main() {
+  await applyStoredSources().catch(() => []);
   const report = await runDoctor();
 
   console.log('\nCompanion dashboard — connection doctor');

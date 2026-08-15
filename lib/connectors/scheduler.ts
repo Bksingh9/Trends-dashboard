@@ -24,6 +24,7 @@
 import { minutesSince, trailingWindow, type DateWindow } from '@/lib/format/dates';
 import { CONNECTORS, getConnector } from './registry';
 import { lastRunFor, isRunning } from './run-log';
+import { applyStoredSources } from '@/lib/credentials/apply';
 
 /**
  * §6.4 — how much history each run re-covers.
@@ -153,6 +154,11 @@ const DEFAULT_BUDGET_MS = 240_000; // 4 min, inside the route's maxDuration of 3
  * converts a slow refresh into a 429 storm and a red board.
  */
 export async function tick(opts: TickOptions = {}): Promise<TickResult> {
+  // §9.5 — credentials configured in the UI are projected onto the environment
+  // before anything runs, so every connector keeps reading env exactly as it
+  // always has and none of them needs to know the sources page exists.
+  await applyStoredSources().catch(() => []);
+
   const startedAt = new Date().toISOString();
   const t0 = Date.now();
   const budget = opts.budgetMs ?? DEFAULT_BUDGET_MS;
